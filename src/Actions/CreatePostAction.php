@@ -1,19 +1,30 @@
 <?php
 
+declare(strict_types=1);
+
 namespace IvanBaric\Blog\Actions;
 
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
+use IvanBaric\Blog\Actions\Concerns\AuthorizesBlogActions;
 use IvanBaric\Blog\Data\ActionResult;
+use IvanBaric\Blog\Events\PostCreated;
 use IvanBaric\Blog\Models\Post;
 
 final class CreatePostAction
 {
+    use AuthorizesBlogActions;
+
     /**
      * @param  array<string, mixed>  $data
      */
     public function handle(array $data): ActionResult
     {
+        if ($result = $this->authorizeBlogAction('blog.create')) {
+            return $result;
+        }
+
         $validator = Validator::make($data, $this->rules(), attributes: $this->attributes());
 
         if ($validator->fails()) {
@@ -21,7 +32,11 @@ final class CreatePostAction
         }
 
         $model = config('blog.models.post', Post::class);
-        $post = $model::query()->create($validator->validated());
+        $post = DB::transaction(
+            static fn (): Post => $model::query()->create($validator->validated()),
+        );
+
+        PostCreated::dispatch($post);
 
         return ActionResult::success(__('Objava je izrađena.'), $post);
     }
@@ -36,6 +51,7 @@ final class CreatePostAction
             'title' => ['required', 'array'],
             'excerpt' => ['nullable', 'array'],
             'content' => ['nullable', 'array'],
+            'context' => ['nullable', 'string', Rule::in(array_keys(config('blog.contexts', [])))],
             'status' => ['required', 'string', Rule::in(array_keys(config('blog.statuses', [])))],
             'featured_image' => ['nullable', 'string', 'max:2048'],
             'published_at' => ['nullable', 'date'],
@@ -57,6 +73,7 @@ final class CreatePostAction
             'title' => __('naslov'),
             'excerpt' => __('sažetak'),
             'content' => __('sadržaj'),
+            'context' => __('kontekst'),
             'status' => __('status'),
             'published_at' => __('datum objave'),
             'starts_at' => __('datum početka'),

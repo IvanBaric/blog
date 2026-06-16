@@ -9,10 +9,8 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Carbon;
+use IvanBaric\Blog\Support\SlugGenerator;
 use IvanBaric\Blog\Support\TeamResolver;
-use IvanBaric\Gallery\Concerns\HasGalleries;
-use IvanBaric\Sanigen\Traits\Sanigen;
-use IvanBaric\Seo\Concerns\HasSeo;
 use IvanBaric\Taxonomy\Traits\HasTaxonomies;
 
 /**
@@ -36,13 +34,9 @@ use IvanBaric\Taxonomy\Traits\HasTaxonomies;
  */
 class Post extends Model
 {
-    use HasFactory, HasGalleries, HasSeo, HasTaxonomies, HasUuids, Sanigen, SoftDeletes;
+    use HasFactory, HasTaxonomies, HasUuids, SoftDeletes;
 
     protected $guarded = ['id'];
-
-    protected array $generate = [
-        'slug' => 'slugify:slug_source',
-    ];
 
     public function getTable(): string
     {
@@ -80,6 +74,11 @@ class Post extends Model
             }
         });
 
+        static::saving(function (self $post): void {
+            if (! $post->slug || $post->isDirty('title')) {
+                $post->slug = app(SlugGenerator::class)->generate($post, $post->localized('title'));
+            }
+        });
     }
 
     /**
@@ -114,8 +113,7 @@ class Post extends Model
         $query->where('status', 'draft');
     }
 
-    #[Scope]
-    protected function context(Builder $query, string $context): void
+    public function scopeContext(Builder $query, string $context): void
     {
         $query->where('context', $context);
     }
@@ -187,10 +185,15 @@ class Post extends Model
             return (string) $value;
         }
 
-        $locale ??= app()->getLocale();
+        $locale ??= static::currentLocaleCode();
         $fallback = config('blog.translatable.default_locale') ?: config('app.fallback_locale', 'en');
 
         return (string) ($value[$locale] ?? $value[$fallback] ?? reset($value) ?: '');
+    }
+
+    private static function currentLocaleCode(): string
+    {
+        return corexis_locale_code() ?: config('app.locale', 'en');
     }
 
     /**

@@ -8,6 +8,7 @@
         "illuminate/contracts": "^13.0",
         "illuminate/database": "^13.0",
         "illuminate/support": "^13.0",
+        "ivanbaric/corexis": "dev-main as 1.0.0",
         "ivanbaric/taxonomy": "dev-main",
         "livewire/livewire": "^4.0"
     },
@@ -38,6 +39,22 @@
             "pestphp/pest-plugin": true
         }
     },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../corexis",
+            "options": {
+                "symlink": true
+            }
+        },
+        {
+            "type": "path",
+            "url": "../taxonomy",
+            "options": {
+                "symlink": true
+            }
+        }
+    ],
     "minimum-stability": "stable",
     "prefer-stable": true
 }

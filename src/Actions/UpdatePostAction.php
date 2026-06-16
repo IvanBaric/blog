@@ -1,28 +1,45 @@
 <?php
 
+declare(strict_types=1);
+
 namespace IvanBaric\Blog\Actions;
 
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
+use IvanBaric\Blog\Actions\Concerns\AuthorizesBlogActions;
 use IvanBaric\Blog\Data\ActionResult;
+use IvanBaric\Blog\Events\PostUpdated;
 use IvanBaric\Blog\Models\Post;
 
 final class UpdatePostAction
 {
+    use AuthorizesBlogActions;
+
     /**
      * @param  array<string, mixed>  $data
      */
     public function handle(Post $post, array $data): ActionResult
     {
+        if ($result = $this->authorizeBlogAction('blog.update', $post)) {
+            return $result;
+        }
+
         $validator = Validator::make($data, $this->rules(), attributes: $this->attributes());
 
         if ($validator->fails()) {
             return ActionResult::failure(__('Objava nije mogla biti ažurirana.'), $validator->errors());
         }
 
-        $post->fill($validator->validated())->save();
+        $post = DB::transaction(function () use ($post, $validator): Post {
+            $post->fill($validator->validated())->save();
 
-        return ActionResult::success(__('Objava je ažurirana.'), $post->refresh());
+            return $post->refresh();
+        });
+
+        PostUpdated::dispatch($post);
+
+        return ActionResult::success(__('Objava je ažurirana.'), $post);
     }
 
     /**
@@ -35,6 +52,7 @@ final class UpdatePostAction
             'title' => ['required', 'array'],
             'excerpt' => ['nullable', 'array'],
             'content' => ['nullable', 'array'],
+            'context' => ['nullable', 'string', Rule::in(array_keys(config('blog.contexts', [])))],
             'status' => ['required', 'string', Rule::in(array_keys(config('blog.statuses', [])))],
             'featured_image' => ['nullable', 'string', 'max:2048'],
             'published_at' => ['nullable', 'date'],
@@ -56,6 +74,7 @@ final class UpdatePostAction
             'title' => __('naslov'),
             'excerpt' => __('sažetak'),
             'content' => __('sadržaj'),
+            'context' => __('kontekst'),
             'status' => __('status'),
             'published_at' => __('datum objave'),
             'starts_at' => __('datum početka'),

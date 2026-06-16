@@ -63,7 +63,7 @@ return [
 
     'taxonomy' => [
         'enabled' => true,
-        'trait' => 'IvanBaric\\Taxonomy\\Concerns\\HasTaxonomies',
+        'trait' => 'IvanBaric\\Taxonomy\\Traits\\HasTaxonomies',
         'filter_parameter' => 'taxonomy',
     ],
 
@@ -81,6 +81,24 @@ return [
     'admin_ui' => [
         'enabled' => true,
         'layout' => 'layouts.app',
+    ],
+
+    'permissions' => [
+        [
+            'name' => 'blog',
+            'slug' => 'blog',
+            'label' => 'blog::permissions.group',
+            'description' => 'blog::permissions.description',
+            'icon' => 'newspaper',
+            'sort_order' => 30,
+            'items' => [
+                ['name' => 'View', 'slug' => 'view', 'code' => 'blog.view', 'label' => 'blog::permissions.view', 'sort_order' => 10],
+                ['name' => 'Create', 'slug' => 'create', 'code' => 'blog.create', 'label' => 'blog::permissions.create', 'sort_order' => 20],
+                ['name' => 'Update', 'slug' => 'update', 'code' => 'blog.update', 'label' => 'blog::permissions.update', 'sort_order' => 30],
+                ['name' => 'Delete', 'slug' => 'delete', 'code' => 'blog.delete', 'label' => 'blog::permissions.delete', 'sort_order' => 40],
+                ['name' => 'Publish', 'slug' => 'publish', 'code' => 'blog.publish', 'label' => 'blog::permissions.publish', 'sort_order' => 50],
+            ],
+        ],
     ],
 
     'features' => [

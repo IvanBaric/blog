@@ -56,7 +56,7 @@ The route key is `uuid`. Admin and Livewire actions use `uuid`; `id` is not used
 
 ## Integrations
 
-Taxonomy is not implemented here. Configure `blog.taxonomy.trait` for your taxonomy package, for example `IvanBaric\Taxonomy\Concerns\HasTaxonomies`, and attach taxonomy through that package.
+Taxonomy is not implemented here. Configure `blog.taxonomy.trait` for your taxonomy package, for example `IvanBaric\Taxonomy\Traits\HasTaxonomies`, and attach taxonomy through that package.
 
 SEO is not implemented here. Configure `blog.seo.trait` for your SEO package, for example `IvanBaric\Seo\Concerns\HasSeo`, and store SEO data through that package. The `meta` column is only for extensibility and is not an SEO replacement.
 
@@ -76,6 +76,32 @@ Team ownership uses `App\Resolvers\TeamResolver` automatically when the class ex
 Media/gallery logic is not duplicated. The package stores an optional `featured_image` string and exposes media/gallery config hooks for the existing gallery package.
 
 Admin UI shell, sidebar, layout, cards and base structure are not duplicated. The Livewire views use Flux components and render inside `blog.admin_ui.layout`.
+
+## Architecture
+
+State-changing operations should use the package actions in `src/Actions`.
+
+The current write flow is:
+
+```text
+Livewire Component -> PostFormState -> Action -> Blog ActionResult/Corexis ActionResult adapter -> Domain Event -> Listener
+```
+
+The existing `IvanBaric\Blog\Data\ActionResult` class remains for backwards compatibility. Use `toCorexis()` when consumers need `IvanBaric\Corexis\Data\ActionResult`.
+
+Successful write actions dispatch small after-commit domain events:
+
+- `PostCreated`
+- `PostUpdated`
+- `PostDeleted`
+- `PostPublished`
+- `PostUnpublished`
+- `PostArchived`
+- `PostFeatured`
+- `PostUnfeatured`
+- `PostSaved`
+
+`PostSaved` is the integration boundary for save-form side effects. SEO, audit, taxonomy or media packages should listen to blog events instead of being called directly from blog actions.
 
 ## Tests
 

@@ -30,6 +30,11 @@ final class PostIndex extends Component
 
     public string $filter = 'all';
 
+    public function mount(): void
+    {
+        corexis_authorize('blog.view', $this->currentTeamId());
+    }
+
     public function updatedSearch(): void
     {
         $this->resetPage();

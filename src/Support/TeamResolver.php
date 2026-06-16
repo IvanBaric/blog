@@ -2,10 +2,22 @@
 
 namespace IvanBaric\Blog\Support;
 
+use IvanBaric\Corexis\Contracts\TenantResolver;
+
 final class TeamResolver
 {
     public function resolve(): ?int
     {
+        if (app()->bound(TenantResolver::class)) {
+            $resolver = app(TenantResolver::class);
+
+            if ($resolver->enabled()) {
+                $tenantId = $resolver->id();
+
+                return $tenantId === null ? null : (int) $tenantId;
+            }
+        }
+
         $resolver = config('blog.team_resolver');
 
         if (! is_string($resolver) || ! class_exists($resolver)) {

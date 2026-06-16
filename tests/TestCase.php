@@ -3,6 +3,8 @@
 namespace IvanBaric\Blog\Tests;
 
 use IvanBaric\Blog\BlogServiceProvider;
+use IvanBaric\Corexis\CorexisServiceProvider;
+use Livewire\LivewireServiceProvider;
 use Orchestra\Testbench\TestCase as Orchestra;
 
 abstract class TestCase extends Orchestra
@@ -13,6 +15,8 @@ abstract class TestCase extends Orchestra
     protected function getPackageProviders($app): array
     {
         return [
+            CorexisServiceProvider::class,
+            LivewireServiceProvider::class,
             BlogServiceProvider::class,
         ];
     }

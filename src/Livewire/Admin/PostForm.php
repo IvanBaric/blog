@@ -42,7 +42,9 @@ final class PostForm extends Component
 
     public function mount(?Post $post = null): void
     {
-        $this->locale = app()->getLocale();
+        corexis_authorize($post?->exists ? 'blog.update' : 'blog.create', $post?->exists ? $post : []);
+
+        $this->locale = $this->currentLocaleCode();
         $this->form->initialize($this->locale);
 
         if ($post?->exists) {
@@ -236,6 +238,11 @@ final class PostForm extends Component
     private function currentTeamId(): ?int
     {
         return app(TeamResolver::class)->resolve();
+    }
+
+    private function currentLocaleCode(): string
+    {
+        return corexis_locale_code() ?: config('app.locale', 'en');
     }
 
     private function toastFromResult(ActionResult $result): void
