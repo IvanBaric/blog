@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace IvanBaric\Blog\Livewire\Forms;
 
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use IvanBaric\Blog\Models\Post;
 use Livewire\Form;
 
@@ -16,10 +18,11 @@ final class PostFormState extends Form
 
     public string $status = '';
 
-    public ?int $categoryId = null;
+    /** @var array<int, string> */
+    public array $categoryUuids = [];
 
-    /** @var array<int, int> */
-    public array $tagIds = [];
+    /** @var array<int, string> */
+    public array $tagUuids = [];
 
     public ?string $featured_image = null;
 
@@ -29,11 +32,13 @@ final class PostFormState extends Form
 
     public bool $is_featured = false;
 
+    public ?int $lock_version = null;
+
     /** @return array<string, list<string>> */
     public function rules(): array
     {
         return [
-            'featuredImageUpload' => ['nullable', 'image', 'max:4096'],
+            'featuredImageUpload' => corexis_image_upload()->rules(),
         ];
     }
 
@@ -49,14 +54,12 @@ final class PostFormState extends Form
         $this->title = is_array($post->title) ? $post->title : [$locale => (string) $post->title];
         $this->content = is_array($post->content) ? $post->content : [$locale => (string) $post->content];
         $this->status = $post->status;
-        $this->categoryId = $post->taxonomy('category')->value('taxonomy_items.id');
-        $this->tagIds = $post->taxonomy('tags')
-            ->pluck('taxonomy_items.id')
-            ->map(static fn (mixed $id): int => (int) $id)
-            ->all();
+        $this->categoryUuids = $this->taxonomyUuids($post, ['category', 'post_category'])->all();
+        $this->tagUuids = $this->taxonomyUuids($post, ['tags'])->all();
         $this->featured_image = $post->featured_image;
         $this->published_at = $post->published_at?->format('Y-m-d\TH:i');
         $this->is_featured = (bool) $post->is_featured;
+        $this->lock_version = method_exists($post, 'getLockVersion') ? $post->getLockVersion() : (int) ($post->lock_version ?? 0);
     }
 
     /** @return array<string, mixed> */
@@ -78,8 +81,9 @@ final class PostFormState extends Form
             'content' => array_filter($this->content) === [] ? null : $this->content,
             'status' => $this->status,
             'featured_image' => $featuredImage,
-            'published_at' => $this->published_at ? Carbon::parse($this->published_at) : null,
+            'published_at' => $this->publishedAtForSave(),
             'is_featured' => $this->is_featured,
+            'lock_version' => $this->lock_version,
         ];
     }
 
@@ -87,5 +91,37 @@ final class PostFormState extends Form
     {
         $this->featuredImageUpload = null;
         $this->featured_image = null;
+    }
+
+    /**
+     * @param  array<int, string>  $types
+     */
+    private function taxonomyUuids(Post $post, array $types): Collection
+    {
+        return DB::table('taxonomy_items')
+            ->join('taxonomies', 'taxonomy_items.taxonomy_id', '=', 'taxonomies.id')
+            ->join('taxonomyables', 'taxonomy_items.id', '=', 'taxonomyables.taxonomy_item_id')
+            ->where('taxonomyables.taxonomyable_type', $post->getMorphClass())
+            ->where('taxonomyables.taxonomyable_id', $post->getKey())
+            ->whereIn('taxonomies.type', $types)
+            ->orderBy('taxonomy_items.position')
+            ->orderBy('taxonomy_items.name')
+            ->pluck('taxonomy_items.uuid')
+            ->filter()
+            ->map(static fn (mixed $uuid): string => (string) $uuid)
+            ->values();
+    }
+
+    private function publishedAtForSave(): ?Carbon
+    {
+        if ($this->published_at) {
+            return Carbon::parse($this->published_at);
+        }
+
+        if ($this->status === 'published') {
+            return Carbon::parse(now());
+        }
+
+        return null;
     }
 }

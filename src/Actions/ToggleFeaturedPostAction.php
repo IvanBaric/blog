@@ -21,8 +21,16 @@ final class ToggleFeaturedPostAction
             return $result;
         }
 
-        $featured = ! (bool) $post->is_featured;
-        $post = DB::transaction(function () use ($post, $featured): Post {
+        $featured = false;
+
+        $post = DB::transaction(function () use ($post, &$featured): Post {
+            /** @var Post $post */
+            $post = Post::query()
+                ->whereKey($post->getKey())
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            $featured = ! (bool) $post->is_featured;
             $featured ? $post->markAsFeatured() : $post->unmarkAsFeatured();
 
             return $post->refresh();

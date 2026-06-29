@@ -1,6 +1,7 @@
 <?php
 
 use IvanBaric\Blog\Models\Post;
+use IvanBaric\Pages\Models\Page;
 
 return [
     'tables' => [
@@ -36,8 +37,19 @@ return [
 
     'routes' => [
         'admin_name_prefix' => 'admin.blog.',
-        'admin_prefix' => 'admin/blog',
+        'admin_prefix' => 'app/blog',
         'middleware' => ['web', 'auth'],
+    ],
+
+    'public_organization' => [
+        'organization_model' => class_exists('App\\Models\\Organization') ? 'App\\Models\\Organization' : null,
+        'organization_slug_column' => 'slug',
+        'organization_team_column' => 'team_id',
+        'organization_active_scope' => 'active',
+        'page_model' => Page::class,
+        'page_key' => 'posts',
+        'post_taxonomy_view' => 'blog::public.organization-content.post-taxonomy',
+        'post_single_view' => 'blog::public.organization-content.post',
     ],
 
     'pagination' => [

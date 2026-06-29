@@ -11,10 +11,11 @@ use IvanBaric\Blog\Actions\Concerns\AuthorizesBlogActions;
 use IvanBaric\Blog\Data\ActionResult;
 use IvanBaric\Blog\Events\PostUpdated;
 use IvanBaric\Blog\Models\Post;
+use IvanBaric\Corexis\Concerns\UsesOptimisticLocking;
 
 final class UpdatePostAction
 {
-    use AuthorizesBlogActions;
+    use AuthorizesBlogActions, UsesOptimisticLocking;
 
     /**
      * @param  array<string, mixed>  $data
@@ -31,11 +32,18 @@ final class UpdatePostAction
             return ActionResult::failure(__('Objava nije mogla biti ažurirana.'), $validator->errors());
         }
 
-        $post = DB::transaction(function () use ($post, $validator): Post {
-            $post->fill($validator->validated())->save();
+        $validated = $validator->validated();
+        $expectedLockVersion = $this->pullExpectedLockVersion($validated);
 
-            return $post->refresh();
+        $saved = DB::transaction(function () use ($post, $validated, $expectedLockVersion): bool {
+            return $this->saveWithOptimisticLock($post, $validated, $expectedLockVersion);
         });
+
+        if (! $saved) {
+            return ActionResult::fromCorexis($this->staleModelResult());
+        }
+
+        $post->refresh();
 
         PostUpdated::dispatch($post);
 
@@ -49,6 +57,7 @@ final class UpdatePostAction
     {
         return [
             'team_id' => ['nullable', 'integer'],
+            'user_id' => ['nullable', 'integer'],
             'title' => ['required', 'array'],
             'excerpt' => ['nullable', 'array'],
             'content' => ['nullable', 'array'],
@@ -62,6 +71,7 @@ final class UpdatePostAction
             'sort_order' => ['nullable', 'integer', 'min:0'],
             'is_featured' => ['nullable', 'boolean'],
             'meta' => ['nullable', 'array'],
+            'lock_version' => ['nullable', 'integer', 'min:0'],
         ];
     }
 
@@ -76,6 +86,7 @@ final class UpdatePostAction
             'content' => __('sadržaj'),
             'context' => __('kontekst'),
             'status' => __('status'),
+            'user_id' => __('autor'),
             'published_at' => __('datum objave'),
             'starts_at' => __('datum početka'),
             'ends_at' => __('datum završetka'),

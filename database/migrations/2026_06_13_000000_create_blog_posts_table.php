@@ -26,6 +26,7 @@ return new class extends Migration
             $table->unsignedInteger('sort_order')->default(0);
             $table->boolean('is_featured')->default(false);
             $table->json('meta')->nullable();
+            $table->unsignedInteger('lock_version')->default(0);
             $table->timestamps();
             $table->softDeletes();
             $table->unique(['team_id', 'slug']);

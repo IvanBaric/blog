@@ -21,6 +21,12 @@ final class ArchivePostAction
         }
 
         $post = DB::transaction(function () use ($post): Post {
+            /** @var Post $post */
+            $post = Post::query()
+                ->whereKey($post->getKey())
+                ->lockForUpdate()
+                ->firstOrFail();
+
             $post->forceFill(['status' => 'archived'])->save();
 
             return $post->refresh();

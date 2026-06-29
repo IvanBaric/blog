@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace IvanBaric\Blog\Livewire\Admin;
 
 use Flux\Flux;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -34,11 +35,13 @@ final class PostForm extends Component
 
     public string $categorySearch = '';
 
-    public string $newCategoryName = '';
-
     public string $tagSearch = '';
 
-    public string $newTagName = '';
+    public bool $schedulePublication = false;
+
+    public ?string $publishedDate = null;
+
+    public ?string $publishedTime = null;
 
     public function mount(?Post $post = null): void
     {
@@ -48,14 +51,19 @@ final class PostForm extends Component
         $this->form->initialize($this->locale);
 
         if ($post?->exists) {
+            $post = $this->postForCurrentTeam((string) $post->uuid);
             $this->post = $post;
             abort_unless((int) $post->getAttribute('team_id') === $this->currentTeamId(), 404);
             $this->form->fillFromPost($post, $this->locale);
         }
+
+        $this->syncPublishedFieldsFromForm();
     }
 
     public function save(SavePostAction $savePostAction): void
     {
+        $this->syncFormPublishedAt();
+
         try {
             $data = $this->form->data($this->currentTeamId());
         } catch (ValidationException $exception) {
@@ -68,8 +76,8 @@ final class PostForm extends Component
         $result = $savePostAction->handle(
             post: $post,
             data: $data,
-            categoryId: $this->form->categoryId,
-            tagIds: $this->form->tagIds,
+            categoryId: $this->form->categoryUuids,
+            tagIds: $this->form->tagUuids,
             locale: $this->locale,
         );
 
@@ -85,6 +93,7 @@ final class PostForm extends Component
 
         $this->post = $result->data;
         $this->form->fillFromPost($this->post, $this->locale);
+        $this->syncPublishedFieldsFromForm();
 
         $this->toastFromResult($result);
         $this->redirectRoute(config('blog.routes.admin_name_prefix', 'admin.blog.').'edit', ['post' => $this->post->uuid], navigate: true);
@@ -92,24 +101,36 @@ final class PostForm extends Component
 
     public function createCategory(): void
     {
-        $category = $this->createTaxonomyItem('category', $this->newCategoryName, __('Categories'), false);
+        $category = $this->createTaxonomyItem('category', $this->categorySearch, __('Kategorije'), false);
 
-        $this->form->categoryId = (int) $category->id;
+        if (! $category->exists) {
+            return;
+        }
+
+        $categoryUuid = (string) $category->uuid;
+
+        if (! in_array($categoryUuid, $this->form->categoryUuids, true)) {
+            $this->form->categoryUuids[] = $categoryUuid;
+        }
+
         $this->categorySearch = '';
-        $this->newCategoryName = '';
     }
 
     public function createTag(): void
     {
-        $tag = $this->createTaxonomyItem('tags', $this->newTagName, __('Tags'), true);
-        $tagId = (int) $tag->id;
+        $tag = $this->createTaxonomyItem('tags', $this->tagSearch, __('Oznake'), true);
 
-        if (! in_array($tagId, $this->form->tagIds, true)) {
-            $this->form->tagIds[] = $tagId;
+        if (! $tag->exists) {
+            return;
+        }
+
+        $tagUuid = (string) $tag->uuid;
+
+        if (! in_array($tagUuid, $this->form->tagUuids, true)) {
+            $this->form->tagUuids[] = $tagUuid;
         }
 
         $this->tagSearch = '';
-        $this->newTagName = '';
     }
 
     public function removeFeaturedImage(): void
@@ -117,35 +138,72 @@ final class PostForm extends Component
         $this->form->removeFeaturedImage();
     }
 
-    public function removeTag(int $tagId): void
+    public function removeTag(string $tagUuid): void
     {
-        $this->form->tagIds = array_values(array_filter(
-            $this->form->tagIds,
-            static fn (int $selectedTagId): bool => $selectedTagId !== $tagId,
+        $this->form->tagUuids = array_values(array_filter(
+            $this->form->tagUuids,
+            static fn (string $selectedTagUuid): bool => $selectedTagUuid !== $tagUuid,
         ));
+    }
+
+    public function updatedFormCategoryUuids(mixed $value = null): void
+    {
+        $this->categorySearch = '';
+    }
+
+    public function updatedFormTagUuids(mixed $value = null): void
+    {
+        $this->tagSearch = '';
+    }
+
+    public function updatedSchedulePublication(bool $value): void
+    {
+        if (! $value) {
+            $this->publishedDate = null;
+            $this->publishedTime = null;
+            $this->form->published_at = null;
+
+            return;
+        }
+
+        $now = now();
+        $this->publishedDate ??= $now->format('Y-m-d');
+        $this->publishedTime ??= $now->format('H:i');
+
+        $this->syncFormPublishedAt();
+    }
+
+    public function updatedPublishedDate(mixed $value = null): void
+    {
+        $this->syncFormPublishedAt();
+    }
+
+    public function updatedPublishedTime(mixed $value = null): void
+    {
+        $this->syncFormPublishedAt();
     }
 
     #[Computed]
     public function categories(): Collection
     {
-        return $this->taxonomyItems('category', $this->categorySearch, $this->form->categoryId ? [(int) $this->form->categoryId] : []);
+        return $this->taxonomyItems('category', $this->categorySearch, $this->form->categoryUuids);
     }
 
     #[Computed]
     public function tags(): Collection
     {
-        return $this->taxonomyItems('tags', $this->tagSearch, $this->form->tagIds);
+        return $this->taxonomyItems('tags', $this->tagSearch, $this->form->tagUuids);
     }
 
     #[Computed]
     public function selectedTags(): Collection
     {
-        if ($this->form->tagIds === []) {
+        if ($this->form->tagUuids === []) {
             return collect();
         }
 
         return TaxonomyItem::query()
-            ->whereIn('id', $this->form->tagIds)
+            ->whereIn('uuid', $this->form->tagUuids)
             ->ordered()
             ->get();
     }
@@ -176,26 +234,52 @@ final class PostForm extends Component
         $name = trim($name);
 
         if ($name === '') {
-            $this->addError($type === 'category' ? 'newCategoryName' : 'newTagName', __('Naziv je obavezan.'));
+            $this->addError($type === 'category' ? 'categorySearch' : 'tagSearch', __('Naziv je obavezan.'));
 
             return new TaxonomyItem;
         }
 
-        $taxonomy = Taxonomy::query()->firstOrCreate(
-            ['type' => $type, 'slug' => Str::slug($taxonomyName)],
-            ['name' => $taxonomyName, 'is_filterable' => true, 'is_multiple' => $multiple],
-        );
+        $teamId = $this->currentTeamId();
 
-        return TaxonomyItem::query()->firstOrCreate(
-            ['taxonomy_id' => $taxonomy->id, 'slug' => Str::slug($name)],
-            ['name' => $name],
-        );
+        $taxonomy = Taxonomy::query()
+            ->where('type', $type)
+            ->where('slug', Str::slug($taxonomyName))
+            ->when($teamId, fn ($query) => $query->where('team_id', $teamId))
+            ->first();
+
+        if (! $taxonomy) {
+            $taxonomy = new Taxonomy([
+                'type' => $type,
+                'slug' => Str::slug($taxonomyName),
+                'name' => $taxonomyName,
+                'is_filterable' => true,
+                'is_multiple' => $multiple,
+            ]);
+            $taxonomy->forceFill(['team_id' => $teamId])->save();
+        }
+
+        $item = TaxonomyItem::query()
+            ->where('taxonomy_id', $taxonomy->id)
+            ->where('slug', Str::slug($name))
+            ->when($teamId, fn ($query) => $query->where('team_id', $teamId))
+            ->first();
+
+        if (! $item) {
+            $item = new TaxonomyItem([
+                'taxonomy_id' => $taxonomy->id,
+                'slug' => Str::slug($name),
+                'name' => $name,
+            ]);
+            $item->forceFill(['team_id' => $teamId])->save();
+        }
+
+        return $item;
     }
 
     /**
-     * @param  array<int, int>  $selectedIds
+     * @param  array<int, string>  $selectedUuids
      */
-    private function taxonomyItems(string $type, string $search, array $selectedIds = []): Collection
+    private function taxonomyItems(string $type, string $search, array $selectedUuids = []): Collection
     {
         $search = trim($search);
 
@@ -206,23 +290,97 @@ final class PostForm extends Component
             ->limit(20)
             ->get();
 
-        $selectedIds = array_values(array_unique(array_filter(array_map('intval', $selectedIds))));
+        $selectedUuids = array_values(array_unique(array_filter(array_map(
+            static fn (mixed $uuid): string => trim((string) $uuid),
+            $selectedUuids,
+        ))));
 
-        if ($search !== '' || $selectedIds === []) {
+        if ($selectedUuids === []) {
             return $results;
         }
 
-        $missingSelectedIds = array_values(array_diff($selectedIds, $results->pluck('id')->map(fn (mixed $id): int => (int) $id)->all()));
+        $missingSelectedUuids = array_values(array_diff($selectedUuids, $results->pluck('uuid')->map(fn (mixed $uuid): string => (string) $uuid)->all()));
 
-        if ($missingSelectedIds === []) {
+        if ($missingSelectedUuids === []) {
             return $results;
         }
 
         return TaxonomyItem::query()
-            ->whereIn('id', $missingSelectedIds)
+            ->whereIn('uuid', $missingSelectedUuids)
             ->ordered()
             ->get()
             ->merge($results);
+    }
+
+    private function syncPublishedFieldsFromForm(): void
+    {
+        if (! $this->form->published_at) {
+            $this->schedulePublication = false;
+            $this->publishedDate = null;
+            $this->publishedTime = null;
+
+            return;
+        }
+
+        $publishedAt = Carbon::parse($this->form->published_at);
+
+        $this->schedulePublication = true;
+        $this->publishedDate = $publishedAt->format('Y-m-d');
+        $this->publishedTime = $publishedAt->format('H:i');
+    }
+
+    private function syncFormPublishedAt(): void
+    {
+        if (! $this->schedulePublication) {
+            $this->form->published_at = null;
+
+            return;
+        }
+
+        if (! filled($this->publishedDate)) {
+            $this->form->published_at = null;
+
+            return;
+        }
+
+        $date = $this->normalizedPublishedDate();
+
+        if ($date === null) {
+            $this->form->published_at = null;
+
+            return;
+        }
+
+        $time = filled($this->publishedTime) ? substr((string) $this->publishedTime, 0, 5) : '00:00';
+
+        if (! preg_match('/^\d{2}:\d{2}$/', $time)) {
+            $time = '00:00';
+        }
+
+        $this->form->published_at = $date.'T'.$time;
+    }
+
+    private function normalizedPublishedDate(): ?string
+    {
+        $date = trim((string) $this->publishedDate);
+
+        if ($date === '') {
+            return null;
+        }
+
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+            return $date;
+        }
+
+        if (preg_match('/^(\d{1,2})\.(\d{1,2})\.(\d{4})\.?$/', $date, $matches)) {
+            return sprintf('%04d-%02d-%02d', (int) $matches[3], (int) $matches[2], (int) $matches[1]);
+        }
+
+        try {
+            return Carbon::parse($date)->format('Y-m-d');
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     private function postForCurrentTeam(string $uuid): Post

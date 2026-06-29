@@ -22,17 +22,9 @@
 
         <div class="space-y-6">
             <section class="admin-panel p-6">
-                <div class="mb-6">
-                    <div class="flex items-center gap-2">
-                        <h2 class="admin-panel-title">{{ __('Sadržaj') }}</h2>
-                        <x-ui.help-tooltip :content="__('SEO naslov i opis automatski se popunjavaju iz naslova i sadržaja objave.')" />
-                    </div>
-                    <p class="admin-panel-description">{{ __('Naslov i glavni tekst objave koji se prikazuju na javnoj stranici.') }}</p>
-                </div>
-
                 <div class="space-y-5">
                     <flux:input wire:model="form.title.{{ $locale }}" :label="__('Naslov')" type="text" required autofocus />
-                    <flux:editor wire:model="form.content.{{ $locale }}" :label="__('Sadržaj')" :description="__('Glavni tekst objave.')" />
+                    <flux:editor wire:model="form.content.{{ $locale }}" :label="__('Sadržaj')" :description="__('Glavni tekst objave.')" class="**:data-[slot=content]:min-h-[30rem]!" />
                 </div>
             </section>
 
@@ -40,21 +32,21 @@
                 <section class="admin-panel p-6">
                     <div class="space-y-5">
                         <div>
-                            <h2 class="admin-panel-title">{{ __('Kategorija') }}</h2>
-                            <p class="admin-panel-description mt-1">{{ __('Odaberite postojeću kategoriju ili dodajte novu izravno iz pretrage.') }}</p>
+                            <h2 class="admin-panel-title">{{ __('Kategorije') }}</h2>
+                            <p class="admin-panel-description mt-1">{{ __('Odaberite jednu ili više kategorija ili dodajte novu izravno iz pretrage.') }}</p>
                         </div>
 
-                        <flux:pillbox wire:model="form.categoryId" variant="combobox" :placeholder="__('Odaberi kategoriju...')">
+                        <flux:pillbox wire:model.live="form.categoryUuids" variant="combobox" multiple :placeholder="__('Odaberi kategorije...')">
                             <x-slot name="input">
-                                <flux:pillbox.input wire:model.live.debounce.250ms="categorySearch" :placeholder="__('Pretraži kategorije...')" />
+                                <flux:pillbox.input wire:model.live.debounce.200ms="categorySearch" :placeholder="__('Pretraži kategorije...')" />
                             </x-slot>
 
                             @foreach ($this->categories as $category)
-                                <flux:pillbox.option :wire:key="'category-'.$category->id" :value="$category->id">{{ $category->name }}</flux:pillbox.option>
+                                <flux:pillbox.option :wire:key="'category-'.$category->uuid" :value="(string) $category->uuid">{{ $category->name }}</flux:pillbox.option>
                             @endforeach
 
-                            <flux:pillbox.option.create modal="create-category">
-                                {{ __('Dodaj novu kategoriju') }}
+                            <flux:pillbox.option.create wire:click="createCategory" min-length="2">
+                                {{ __('Dodaj kategoriju') }} "<span wire:text="categorySearch"></span>"
                             </flux:pillbox.option.create>
                         </flux:pillbox>
                     </div>
@@ -67,17 +59,17 @@
                             <p class="admin-panel-description mt-1">{{ __('Dodajte jednu ili više oznaka za tematsko povezivanje objava.') }}</p>
                         </div>
 
-                        <flux:pillbox wire:model="form.tagIds" variant="combobox" multiple :placeholder="__('Odaberi oznake...')">
+                        <flux:pillbox wire:model.live="form.tagUuids" variant="combobox" multiple :placeholder="__('Odaberi oznake...')">
                             <x-slot name="input">
-                                <flux:pillbox.input wire:model.live.debounce.250ms="tagSearch" :placeholder="__('Pretraži oznake...')" />
+                                <flux:pillbox.input wire:model.live.debounce.200ms="tagSearch" :placeholder="__('Pretraži oznake...')" />
                             </x-slot>
 
                             @foreach ($this->tags as $tag)
-                                <flux:pillbox.option :wire:key="'tag-'.$tag->id" :value="$tag->id">{{ $tag->name }}</flux:pillbox.option>
+                                <flux:pillbox.option :wire:key="'tag-'.$tag->uuid" :value="(string) $tag->uuid">{{ $tag->name }}</flux:pillbox.option>
                             @endforeach
 
-                            <flux:pillbox.option.create modal="create-tag">
-                                {{ __('Dodaj novu oznaku') }}
+                            <flux:pillbox.option.create wire:click="createTag" min-length="2">
+                                {{ __('Dodaj oznaku') }} "<span wire:text="tagSearch"></span>"
                             </flux:pillbox.option.create>
                         </flux:pillbox>
                     </div>
@@ -93,13 +85,33 @@
                         <p class="admin-panel-description mt-1">{{ __('Postavite status, datum objave i istaknutost.') }}</p>
                     </div>
 
-                    <flux:select wire:model="form.status" :label="__('Status')">
+                    <flux:select wire:model="form.status" variant="listbox" :label="__('Status')">
                         @foreach (config('blog.statuses', []) as $value => $statusConfig)
                             <flux:select.option :value="$value">{{ __($statusConfig['label'] ?? $value) }}</flux:select.option>
                         @endforeach
                     </flux:select>
 
-                    <flux:input wire:model="form.published_at" :label="__('Datum objave')" type="datetime-local" />
+                    <div class="space-y-4">
+                        <flux:checkbox wire:model.live="schedulePublication" :label="__('Postavi datum objave')" />
+
+                        @if ($schedulePublication)
+                            <div class="space-y-4">
+                                <flux:input
+                                    wire:model.live="publishedDate"
+                                    type="date"
+                                    :label="__('Datum objave')"
+                                />
+
+                                <flux:time-picker
+                                    wire:model.live="publishedTime"
+                                    type="input"
+                                    time-format="24-hour"
+                                    clearable
+                                    :label="__('Vrijeme objave')"
+                                />
+                            </div>
+                        @endif
+                    </div>
 
                     @if (config('blog.features.featured_posts'))
                         <flux:checkbox wire:model="form.is_featured" :label="__('Istaknuta objava')" />
@@ -168,36 +180,4 @@
             </section>
         </aside>
     </form>
-
-    <flux:modal name="create-category" class="md:w-96">
-        <form wire:submit="createCategory" class="space-y-6">
-            <div>
-                <flux:heading size="lg">{{ __('Dodaj novu kategoriju') }}</flux:heading>
-                <flux:text class="mt-2">{{ __('Unesite naziv nove kategorije objava.') }}</flux:text>
-            </div>
-
-            <flux:input wire:model="newCategoryName" :label="__('Naziv')" :placeholder="__('npr. Novosti')" />
-
-            <div class="flex">
-                <flux:spacer />
-                <flux:button type="submit" variant="primary">{{ __('Dodaj kategoriju') }}</flux:button>
-            </div>
-        </form>
-    </flux:modal>
-
-    <flux:modal name="create-tag" class="md:w-96">
-        <form wire:submit="createTag" class="space-y-6">
-            <div>
-                <flux:heading size="lg">{{ __('Dodaj novu oznaku') }}</flux:heading>
-                <flux:text class="mt-2">{{ __('Unesite naziv nove oznake objava.') }}</flux:text>
-            </div>
-
-            <flux:input wire:model="newTagName" :label="__('Naziv')" :placeholder="__('npr. Istraživanje')" />
-
-            <div class="flex">
-                <flux:spacer />
-                <flux:button type="submit" variant="primary">{{ __('Dodaj oznaku') }}</flux:button>
-            </div>
-        </form>
-    </flux:modal>
 </section>

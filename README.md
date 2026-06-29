@@ -24,13 +24,23 @@ php artisan vendor:publish --tag=blog-translations
 
 `config/blog.php` controls table names, model overrides, team resolver, contexts, statuses, route names, middleware, pagination, translatable fields, taxonomy, SEO, media/gallery, admin-ui and feature flags.
 
-The default admin routes are:
+The default admin routes use the `app/blog` prefix:
 
 ```php
 route('admin.blog.index');
 route('admin.blog.create');
 route('admin.blog.edit', ['post' => $post->uuid]);
+route('admin.blog.categories');
+route('admin.blog.tags');
 ```
+
+## Project Integration
+
+For the standard admin integration used in every project, see:
+
+- [`docs/project-integration.md`](docs/project-integration.md)
+
+That document covers the required `Sve objave`, `Kategorije` and `Oznake` sidebar links, the blog admin routes, optional project aliases such as `niva.posts.*`, the package taxonomy screen and reusable public post views.
 
 ## Usage
 
@@ -73,7 +83,7 @@ Slug generation is delegated to Sanigen when a configured generator is available
 
 Team ownership uses `App\Resolvers\TeamResolver` automatically when the class exists. The resolver may expose `resolve()`, `currentTeamId()`, `teamId()` or `id()`.
 
-Media/gallery logic is not duplicated. The package stores an optional `featured_image` string and exposes media/gallery config hooks for the existing gallery package.
+Media/gallery logic is not duplicated. The package uses `ivanbaric/gallery` through `HasGalleries`, stores an optional `featured_image` string and exposes media/gallery config hooks for gallery integrations.
 
 Admin UI shell, sidebar, layout, cards and base structure are not duplicated. The Livewire views use Flux components and render inside `blog.admin_ui.layout`.
 

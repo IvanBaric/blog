@@ -22,6 +22,12 @@ final class PublishPostAction
         }
 
         $post = DB::transaction(function () use ($post, $published): Post {
+            /** @var Post $post */
+            $post = Post::query()
+                ->whereKey($post->getKey())
+                ->lockForUpdate()
+                ->firstOrFail();
+
             $published ? $post->publish() : $post->unpublish();
 
             return $post->refresh();

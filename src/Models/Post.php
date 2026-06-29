@@ -5,17 +5,22 @@ namespace IvanBaric\Blog\Models;
 use Illuminate\Database\Eloquent\Attributes\Scope;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Carbon;
+use IvanBaric\Corexis\Concerns\HasLockVersion;
 use IvanBaric\Blog\Support\SlugGenerator;
 use IvanBaric\Blog\Support\TeamResolver;
+use IvanBaric\Gallery\Concerns\HasGalleries;
 use IvanBaric\Taxonomy\Traits\HasTaxonomies;
 
 /**
  * @property int $id
  * @property int|null $team_id
+ * @property int|null $user_id
  * @property string $uuid
  * @property string $slug
  * @property array<string, mixed>|string $title
@@ -34,7 +39,7 @@ use IvanBaric\Taxonomy\Traits\HasTaxonomies;
  */
 class Post extends Model
 {
-    use HasFactory, HasTaxonomies, HasUuids, SoftDeletes;
+    use HasFactory, HasGalleries, HasLockVersion, HasTaxonomies, HasUuids, SoftDeletes;
 
     protected $guarded = ['id'];
 
@@ -72,6 +77,10 @@ class Post extends Model
             if (! ($attributes['team_id'] ?? null)) {
                 $post->setAttribute('team_id', app(TeamResolver::class)->resolve());
             }
+
+            if (! ($attributes['user_id'] ?? null) && Auth::check()) {
+                $post->setAttribute('user_id', Auth::id());
+            }
         });
 
         static::saving(function (self $post): void {
@@ -87,6 +96,7 @@ class Post extends Model
     protected function casts(): array
     {
         return [
+            'user_id' => 'integer',
             'title' => 'array',
             'excerpt' => 'array',
             'content' => 'array',
@@ -96,7 +106,15 @@ class Post extends Model
             'sort_order' => 'integer',
             'is_featured' => 'boolean',
             'meta' => 'array',
+            'lock_version' => 'integer',
         ];
+    }
+
+    public function author(): BelongsTo
+    {
+        $userModel = config('auth.providers.users.model', \App\Models\User::class);
+
+        return $this->belongsTo($userModel, 'user_id');
     }
 
     #[Scope]

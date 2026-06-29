@@ -1,9 +1,9 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
-use IvanBaric\Blog\Livewire\Admin\PostForm;
-use IvanBaric\Blog\Livewire\Admin\PostIndex;
 
-Route::get('/', PostIndex::class)->name('index');
-Route::get('/create', PostForm::class)->name('create');
-Route::get('/{post:uuid}/edit', PostForm::class)->name('edit');
+Route::livewire('/', 'blog.admin.posts.index')->name('index');
+// Route::livewire('/create', 'blog.admin.posts.form')->name('create');
+Route::livewire('/categories', 'blog.admin.post-taxonomies')->defaults('type', 'category')->name('categories');
+Route::livewire('/tags', 'blog.admin.post-taxonomies')->defaults('type', 'tags')->name('tags');
+Route::livewire('/{post:uuid}/edit', 'blog.admin.posts.form')->name('edit');

@@ -48,6 +48,7 @@ final class CreatePostAction
     {
         return [
             'team_id' => ['nullable', 'integer'],
+            'user_id' => ['nullable', 'integer'],
             'title' => ['required', 'array'],
             'excerpt' => ['nullable', 'array'],
             'content' => ['nullable', 'array'],
@@ -75,6 +76,7 @@ final class CreatePostAction
             'content' => __('sadržaj'),
             'context' => __('kontekst'),
             'status' => __('status'),
+            'user_id' => __('autor'),
             'published_at' => __('datum objave'),
             'starts_at' => __('datum početka'),
             'ends_at' => __('datum završetka'),
