@@ -7,7 +7,10 @@ namespace IvanBaric\Blog\Livewire\Forms;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use IvanBaric\Blog\Models\Post;
+use IvanBaric\Taxonomy\Support\TaxonomyModels;
+use Livewire\Attributes\Locked;
 use Livewire\Form;
 
 final class PostFormState extends Form
@@ -24,14 +27,15 @@ final class PostFormState extends Form
     /** @var array<int, string> */
     public array $tagUuids = [];
 
-    public ?string $featured_image = null;
-
     public mixed $featuredImageUpload = null;
+
+    public bool $removeFeaturedImage = false;
 
     public ?string $published_at = null;
 
     public bool $is_featured = false;
 
+    #[Locked]
     public ?int $lock_version = null;
 
     /** @return array<string, list<string>> */
@@ -40,6 +44,15 @@ final class PostFormState extends Form
         return [
             'featuredImageUpload' => corexis_image_upload()->rules(),
         ];
+    }
+
+    /** @return array<string, string> */
+    public function messages(): array
+    {
+        return array_replace(
+            corexis_image_upload()->messages('featuredImageUpload'),
+            corexis_image_upload()->messages('form.featuredImageUpload'),
+        );
     }
 
     public function initialize(string $locale): void
@@ -56,41 +69,34 @@ final class PostFormState extends Form
         $this->status = $post->status;
         $this->categoryUuids = $this->taxonomyUuids($post, ['category', 'post_category'])->all();
         $this->tagUuids = $this->taxonomyUuids($post, ['tags'])->all();
-        $this->featured_image = $post->featured_image;
+        $this->featuredImageUpload = null;
+        $this->removeFeaturedImage = false;
         $this->published_at = $post->published_at?->format('Y-m-d\TH:i');
         $this->is_featured = (bool) $post->is_featured;
-        $this->lock_version = method_exists($post, 'getLockVersion') ? $post->getLockVersion() : (int) ($post->lock_version ?? 0);
+        $this->lock_version = $post->getLockVersion();
     }
 
     /** @return array<string, mixed> */
-    public function data(?int $teamId): array
+    public function data(): array
     {
         $this->validate();
 
-        $featuredImage = $this->featured_image;
-
-        if ($this->featuredImageUpload) {
-            $featuredImage = $this->featuredImageUpload->store('blog', 'public');
-            $this->featured_image = $featuredImage;
-            $this->featuredImageUpload = null;
-        }
-
         return [
-            'team_id' => $teamId,
             'title' => $this->title,
             'content' => array_filter($this->content) === [] ? null : $this->content,
             'status' => $this->status,
-            'featured_image' => $featuredImage,
             'published_at' => $this->publishedAtForSave(),
             'is_featured' => $this->is_featured,
             'lock_version' => $this->lock_version,
+            '_featured_image_upload' => $this->featuredImageUpload,
+            '_remove_featured_image' => $this->removeFeaturedImage && ! $this->featuredImageUpload,
         ];
     }
 
     public function removeFeaturedImage(): void
     {
         $this->featuredImageUpload = null;
-        $this->featured_image = null;
+        $this->removeFeaturedImage = true;
     }
 
     /**
@@ -98,15 +104,34 @@ final class PostFormState extends Form
      */
     private function taxonomyUuids(Post $post, array $types): Collection
     {
-        return DB::table('taxonomy_items')
-            ->join('taxonomies', 'taxonomy_items.taxonomy_id', '=', 'taxonomies.id')
-            ->join('taxonomyables', 'taxonomy_items.id', '=', 'taxonomyables.taxonomy_item_id')
+        $taxonomyItemModel = TaxonomyModels::taxonomyItem();
+        $taxonomyModel = TaxonomyModels::taxonomy();
+        $taxonomyItemsTable = (new $taxonomyItemModel)->getTable();
+        $taxonomiesTable = (new $taxonomyModel)->getTable();
+        $query = DB::table($taxonomyItemsTable)
+            ->join($taxonomiesTable, $taxonomyItemsTable.'.taxonomy_id', '=', $taxonomiesTable.'.id')
+            ->join('taxonomyables', $taxonomyItemsTable.'.id', '=', 'taxonomyables.taxonomy_item_id')
             ->where('taxonomyables.taxonomyable_type', $post->getMorphClass())
             ->where('taxonomyables.taxonomyable_id', $post->getKey())
-            ->whereIn('taxonomies.type', $types)
-            ->orderBy('taxonomy_items.position')
-            ->orderBy('taxonomy_items.name')
-            ->pluck('taxonomy_items.uuid')
+            ->whereIn($taxonomiesTable.'.type', $types);
+
+        if (config('corexis.tenancy.enabled', false)) {
+            $column = (string) config('corexis.tenancy.id_column', 'team_id');
+            $teamId = $post->getAttribute($column);
+
+            if (Schema::hasColumn($taxonomyItemsTable, $column)) {
+                $query->where($taxonomyItemsTable.'.'.$column, $teamId);
+            }
+
+            if (Schema::hasColumn('taxonomyables', $column)) {
+                $query->where('taxonomyables.'.$column, $teamId);
+            }
+        }
+
+        return $query
+            ->orderBy($taxonomyItemsTable.'.position')
+            ->orderBy($taxonomyItemsTable.'.name')
+            ->pluck($taxonomyItemsTable.'.uuid')
             ->filter()
             ->map(static fn (mixed $uuid): string => (string) $uuid)
             ->values();

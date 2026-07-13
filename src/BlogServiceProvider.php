@@ -7,6 +7,8 @@ use Illuminate\Support\ServiceProvider;
 use IvanBaric\Blog\Livewire\Admin\PostForm;
 use IvanBaric\Blog\Livewire\Admin\PostIndex;
 use IvanBaric\Blog\Livewire\Admin\PostTaxonomies;
+use IvanBaric\Blog\Livewire\PublicSite\PostSingleActions;
+use IvanBaric\Blog\Livewire\PublicSite\PostSingleContent;
 use Livewire\Livewire;
 
 final class BlogServiceProvider extends ServiceProvider
@@ -32,10 +34,8 @@ final class BlogServiceProvider extends ServiceProvider
         Livewire::component('blog.admin.posts.index', PostIndex::class);
         Livewire::component('blog.admin.posts.form', PostForm::class);
         Livewire::component('blog.admin.post-taxonomies', PostTaxonomies::class);
-
-        Livewire::component('blog::admin.posts.index', PostIndex::class);
-        Livewire::component('blog::admin.posts.form', PostForm::class);
-        Livewire::component('blog::admin.post-taxonomies', PostTaxonomies::class);
+        Livewire::component('blog.public.post-single-actions', PostSingleActions::class);
+        Livewire::component('blog.public.post-single-content', PostSingleContent::class);
 
         if (config('blog.features.admin_routes', true)) {
             $this->loadAdminRoutes();

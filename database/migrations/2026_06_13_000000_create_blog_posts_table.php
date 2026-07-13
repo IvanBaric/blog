@@ -3,12 +3,13 @@
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
+use IvanBaric\Blog\Support\BlogConfigResolver;
 
 return new class extends Migration
 {
     public function up(): void
     {
-        Schema::create(config('blog.tables.posts', 'blog_posts'), function (Blueprint $table): void {
+        Schema::create(BlogConfigResolver::postsTable(), function (Blueprint $table): void {
             $table->id();
             $table->foreignId('team_id')->nullable()->index();
             $table->uuid('uuid')->unique();
@@ -18,7 +19,6 @@ return new class extends Migration
             $table->json('content')->nullable();
             $table->string('context')->index();
             $table->string('status')->index();
-            $table->string('featured_image')->nullable();
             $table->timestamp('published_at')->nullable()->index();
             $table->timestamp('starts_at')->nullable()->index();
             $table->timestamp('ends_at')->nullable()->index();
@@ -35,6 +35,6 @@ return new class extends Migration
 
     public function down(): void
     {
-        Schema::dropIfExists(config('blog.tables.posts', 'blog_posts'));
+        Schema::dropIfExists(BlogConfigResolver::postsTable());
     }
 };

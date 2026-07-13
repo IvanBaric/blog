@@ -8,10 +8,11 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 use IvanBaric\Blog\Actions\Concerns\AuthorizesBlogActions;
-use IvanBaric\Blog\Data\ActionResult;
 use IvanBaric\Blog\Events\PostUpdated;
 use IvanBaric\Blog\Models\Post;
+use IvanBaric\Blog\Support\PublishablePostContent;
 use IvanBaric\Corexis\Concerns\UsesOptimisticLocking;
+use IvanBaric\Corexis\Data\ActionResult;
 
 final class UpdatePostAction
 {
@@ -26,13 +27,50 @@ final class UpdatePostAction
             return $result;
         }
 
+        $post = $post->newQuery()
+            ->whereKey($post->getKey())
+            ->firstOrFail();
+
+        if ($post->status === 'archived') {
+            return ActionResult::error(
+                __('Arhivirana objava je zaključana. Prvo je vratite u skicu.'),
+                code: 'blog_archived_post_is_locked',
+                errors: ['status' => [__('Arhivirana objava je zaključana. Prvo je vratite u skicu.')]],
+            );
+        }
+
         $validator = Validator::make($data, $this->rules(), attributes: $this->attributes());
 
+        $validator->after(function ($validator) use ($data): void {
+            if (($data['status'] ?? null) === 'archived') {
+                $validator->errors()->add('status', __('Objavu arhivirajte kroz akciju Arhiviraj.'));
+            }
+
+            if (($data['status'] ?? null) === 'published' && ! PublishablePostContent::isPresent($data['content'] ?? null)) {
+                $validator->errors()->add('content', __('Objavu nije moguće objaviti bez sadržaja.'));
+            }
+        });
+
         if ($validator->fails()) {
-            return ActionResult::failure(__('Objava nije mogla biti ažurirana.'), $validator->errors());
+            return ActionResult::error(
+                message: $validator->errors()->first('content') ?: __('Objava nije mogla biti ažurirana.'),
+                code: 'validation_failed',
+                errors: $validator->errors()->toArray(),
+            );
         }
 
         $validated = $validator->validated();
+
+        $actorId = corexis_actor_id();
+
+        if ($actorId !== null) {
+            $validated['updated_user_id'] = $actorId;
+        }
+
+        if (($validated['status'] ?? null) !== 'published') {
+            $validated['is_featured'] = false;
+        }
+
         $expectedLockVersion = $this->pullExpectedLockVersion($validated);
 
         $saved = DB::transaction(function () use ($post, $validated, $expectedLockVersion): bool {
@@ -40,7 +78,7 @@ final class UpdatePostAction
         });
 
         if (! $saved) {
-            return ActionResult::fromCorexis($this->staleModelResult());
+            return $this->staleModelResult();
         }
 
         $post->refresh();
@@ -56,14 +94,11 @@ final class UpdatePostAction
     private function rules(): array
     {
         return [
-            'team_id' => ['nullable', 'integer'],
-            'user_id' => ['nullable', 'integer'],
             'title' => ['required', 'array'],
             'excerpt' => ['nullable', 'array'],
             'content' => ['nullable', 'array'],
             'context' => ['nullable', 'string', Rule::in(array_keys(config('blog.contexts', [])))],
             'status' => ['required', 'string', Rule::in(array_keys(config('blog.statuses', [])))],
-            'featured_image' => ['nullable', 'string', 'max:2048'],
             'published_at' => ['nullable', 'date'],
             'starts_at' => ['nullable', 'date'],
             'ends_at' => ['nullable', 'date', 'after_or_equal:starts_at'],
@@ -86,7 +121,6 @@ final class UpdatePostAction
             'content' => __('sadržaj'),
             'context' => __('kontekst'),
             'status' => __('status'),
-            'user_id' => __('autor'),
             'published_at' => __('datum objave'),
             'starts_at' => __('datum početka'),
             'ends_at' => __('datum završetka'),

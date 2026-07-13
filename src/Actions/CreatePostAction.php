@@ -4,13 +4,14 @@ declare(strict_types=1);
 
 namespace IvanBaric\Blog\Actions;
 
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 use IvanBaric\Blog\Actions\Concerns\AuthorizesBlogActions;
-use IvanBaric\Blog\Data\ActionResult;
 use IvanBaric\Blog\Events\PostCreated;
-use IvanBaric\Blog\Models\Post;
+use IvanBaric\Blog\Support\BlogModels;
+use IvanBaric\Blog\Support\PublishablePostContent;
+use IvanBaric\Corexis\Contracts\TenantResolver;
+use IvanBaric\Corexis\Data\ActionResult;
 
 final class CreatePostAction
 {
@@ -27,14 +28,50 @@ final class CreatePostAction
 
         $validator = Validator::make($data, $this->rules(), attributes: $this->attributes());
 
+        $validator->after(function ($validator) use ($data): void {
+            if (($data['status'] ?? null) === 'archived') {
+                $validator->errors()->add('status', __('Nova objava ne može biti izrađena kao arhivirana.'));
+            }
+
+            if (($data['status'] ?? null) === 'published' && ! PublishablePostContent::isPresent($data['content'] ?? null)) {
+                $validator->errors()->add('content', __('Objavu nije moguće objaviti bez sadržaja.'));
+            }
+        });
+
         if ($validator->fails()) {
-            return ActionResult::failure(__('Objava nije mogla biti izrađena.'), $validator->errors());
+            return ActionResult::error(
+                message: $validator->errors()->first('content') ?: __('Objava nije mogla biti izrađena.'),
+                code: 'validation_failed',
+                errors: $validator->errors()->toArray(),
+            );
         }
 
-        $model = config('blog.models.post', Post::class);
-        $post = DB::transaction(
-            static fn (): Post => $model::query()->create($validator->validated()),
-        );
+        $validated = $validator->validated();
+
+        $tenantResolver = app(TenantResolver::class);
+        $tenantId = $tenantResolver->id();
+
+        if ($tenantResolver->enabled() && $tenantId === null) {
+            return ActionResult::error(
+                __('Nije moguće odrediti organizaciju za novu objavu.'),
+                code: 'blog_tenant_unresolved',
+                errors: ['authorization' => [__('Nije moguće odrediti organizaciju za novu objavu.')]],
+            );
+        }
+
+        $actorId = corexis_actor_id();
+
+        if ($actorId !== null) {
+            $validated['user_id'] = $actorId;
+            $validated['updated_user_id'] = $actorId;
+        }
+
+        if (($validated['status'] ?? null) !== 'published') {
+            $validated['is_featured'] = false;
+        }
+
+        $model = BlogModels::post();
+        $post = $model::query()->create($validated);
 
         PostCreated::dispatch($post);
 
@@ -47,14 +84,11 @@ final class CreatePostAction
     private function rules(): array
     {
         return [
-            'team_id' => ['nullable', 'integer'],
-            'user_id' => ['nullable', 'integer'],
             'title' => ['required', 'array'],
             'excerpt' => ['nullable', 'array'],
             'content' => ['nullable', 'array'],
             'context' => ['nullable', 'string', Rule::in(array_keys(config('blog.contexts', [])))],
             'status' => ['required', 'string', Rule::in(array_keys(config('blog.statuses', [])))],
-            'featured_image' => ['nullable', 'string', 'max:2048'],
             'published_at' => ['nullable', 'date'],
             'starts_at' => ['nullable', 'date'],
             'ends_at' => ['nullable', 'date', 'after_or_equal:starts_at'],
@@ -76,7 +110,6 @@ final class CreatePostAction
             'content' => __('sadržaj'),
             'context' => __('kontekst'),
             'status' => __('status'),
-            'user_id' => __('autor'),
             'published_at' => __('datum objave'),
             'starts_at' => __('datum početka'),
             'ends_at' => __('datum završetka'),

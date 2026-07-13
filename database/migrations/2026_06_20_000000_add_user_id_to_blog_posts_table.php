@@ -3,13 +3,16 @@
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
+use IvanBaric\Blog\Support\BlogConfigResolver;
 
 return new class extends Migration
 {
     public function up(): void
     {
-        Schema::table(config('blog.tables.posts', 'blog_posts'), function (Blueprint $table): void {
-            if (! Schema::hasColumn(config('blog.tables.posts', 'blog_posts'), 'user_id')) {
+        $tableName = BlogConfigResolver::postsTable();
+
+        Schema::table($tableName, function (Blueprint $table) use ($tableName): void {
+            if (! Schema::hasColumn($tableName, 'user_id')) {
                 $table->foreignId('user_id')->nullable()->after('team_id')->index();
             }
         });
@@ -17,8 +20,10 @@ return new class extends Migration
 
     public function down(): void
     {
-        Schema::table(config('blog.tables.posts', 'blog_posts'), function (Blueprint $table): void {
-            if (Schema::hasColumn(config('blog.tables.posts', 'blog_posts'), 'user_id')) {
+        $tableName = BlogConfigResolver::postsTable();
+
+        Schema::table($tableName, function (Blueprint $table) use ($tableName): void {
+            if (Schema::hasColumn($tableName, 'user_id')) {
                 $table->dropIndex(['user_id']);
                 $table->dropColumn('user_id');
             }

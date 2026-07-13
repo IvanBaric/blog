@@ -18,7 +18,7 @@ Recommended sidebar group:
 <flux:sidebar.group expandable icon="newspaper" heading="Objave" class="grid">
     <flux:sidebar.item
         :href="route('admin.blog.index')"
-        :current="request()->routeIs('admin.blog.index', 'admin.blog.create', 'admin.blog.edit')"
+        :current="request()->routeIs('admin.blog.index', 'admin.blog.edit')"
         wire:navigate
     >
         {{ __('Sve objave') }}
@@ -50,7 +50,6 @@ Default routes:
 
 ```php
 route('admin.blog.index');
-route('admin.blog.create');
 route('admin.blog.edit', ['post' => $post->uuid]);
 route('admin.blog.categories');
 route('admin.blog.tags');
@@ -59,7 +58,6 @@ route('admin.blog.tags');
 Default URL prefix is `app/blog`, so the standard admin pages are:
 
 - `/app/blog`
-- `/app/blog/create`
 - `/app/blog/{post}/edit`
 - `/app/blog/categories`
 - `/app/blog/tags`
@@ -83,7 +81,6 @@ Route::middleware(['auth', 'verified'])
     ->prefix('app')
     ->group(function (): void {
         Route::redirect('/posts', '/app/blog')->name('niva.posts.index');
-        Route::redirect('/posts/create', '/app/blog/create')->name('niva.posts.create');
         Route::get('/posts/{post}/edit', fn (string $post) => redirect()->route('admin.blog.edit', ['post' => $post]))->name('niva.posts.edit');
         Route::redirect('/posts/categories', '/app/blog/categories')->name('niva.posts.categories');
         Route::redirect('/posts/tags', '/app/blog/tags')->name('niva.posts.tags');

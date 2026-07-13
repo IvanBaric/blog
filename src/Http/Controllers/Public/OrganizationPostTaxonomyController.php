@@ -10,7 +10,9 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
-use IvanBaric\Blog\Models\Post;
+use IvanBaric\Blog\Support\BlogConfigResolver;
+use IvanBaric\Blog\Support\BlogModels;
+use IvanBaric\Taxonomy\Support\TaxonomyModels;
 
 final class OrganizationPostTaxonomyController
 {
@@ -25,21 +27,24 @@ final class OrganizationPostTaxonomyController
         $teamId = (int) $organization->getAttribute($this->organizationTeamColumn());
         $types = $taxonomyKind === 'kategorija' ? ['category', 'post_category'] : ['tags'];
         $taxonomyItem = $this->taxonomyItem($teamId, $types, $taxonomySlug);
-        $postModel = config('blog.models.post', Post::class);
+        $postModel = BlogModels::post();
         $postInstance = new $postModel;
         $postTable = $postInstance->getTable();
         $postMorphClass = $postInstance->getMorphClass();
+        $taxonomyTenantColumn = (string) config('corexis.tenancy.id_column', 'team_id');
+        $scopePivotTenant = config('corexis.tenancy.enabled', false)
+            && Schema::hasColumn('taxonomyables', $taxonomyTenantColumn);
 
         $posts = $postModel::query()
-            ->forTeam($teamId)
+            ->forTenant($teamId)
             ->published()
-            ->whereExists(function ($query) use ($taxonomyItem, $teamId, $postTable, $postMorphClass): void {
+            ->whereExists(function ($query) use ($taxonomyItem, $teamId, $postTable, $postMorphClass, $scopePivotTenant, $taxonomyTenantColumn): void {
                 $query->selectRaw('1')
                     ->from('taxonomyables')
                     ->whereColumn('taxonomyables.taxonomyable_id', $postTable.'.id')
                     ->where('taxonomyables.taxonomyable_type', $postMorphClass)
                     ->where('taxonomyables.taxonomy_item_id', $taxonomyItem->id)
-                    ->where('taxonomyables.team_id', $teamId);
+                    ->when($scopePivotTenant, fn ($query) => $query->where('taxonomyables.'.$taxonomyTenantColumn, $teamId));
             })
             ->ordered()
             ->paginate((int) config('blog.pagination.public', 12));
@@ -56,8 +61,8 @@ final class OrganizationPostTaxonomyController
 
     private function organization(string $organizationSlug): Model
     {
-        $model = config('blog.public_organization.organization_model');
-        abort_unless(is_string($model) && is_subclass_of($model, Model::class), 404);
+        $model = BlogConfigResolver::publicOrganizationModel();
+        abort_unless($model !== null, 404);
 
         $query = $model::query();
         $activeScope = (string) config('blog.public_organization.organization_active_scope', '');
@@ -81,12 +86,12 @@ final class OrganizationPostTaxonomyController
         $slugCandidates = array_values(array_unique([$normalized, $canonical]));
 
         return $model::query()
-            ->forTeam($teamId)
+            ->where((string) config('corexis.tenancy.id_column', 'team_id'), $teamId)
             ->published()
             ->where(function (Builder $query) use ($slugCandidates): void {
                 $query->whereIn('slug', $slugCandidates);
 
-                if (Schema::hasColumn(config('pages.tables.pages', 'pages'), 'page_key')) {
+                if (Schema::hasColumn(BlogConfigResolver::pagesTable(), 'page_key')) {
                     $query->orWhereIn('page_key', $slugCandidates);
                 }
             })
@@ -98,17 +103,24 @@ final class OrganizationPostTaxonomyController
      */
     private function taxonomyItem(int $teamId, array $types, string $taxonomySlug): object
     {
-        return DB::table('taxonomy_items')
-            ->join('taxonomies', 'taxonomy_items.taxonomy_id', '=', 'taxonomies.id')
-            ->where('taxonomy_items.team_id', $teamId)
-            ->where('taxonomies.team_id', $teamId)
-            ->whereIn('taxonomies.type', $types)
-            ->where('taxonomy_items.slug', Str::slug($taxonomySlug))
+        $taxonomyItemModel = TaxonomyModels::taxonomyItem();
+        $taxonomyModel = TaxonomyModels::taxonomy();
+        $taxonomyItemsTable = (new $taxonomyItemModel)->getTable();
+        $taxonomiesTable = (new $taxonomyModel)->getTable();
+        $tenantColumn = (string) config('corexis.tenancy.id_column', 'team_id');
+
+        return DB::table($taxonomyItemsTable)
+            ->join($taxonomiesTable, $taxonomyItemsTable.'.taxonomy_id', '=', $taxonomiesTable.'.id')
+            ->when(config('corexis.tenancy.enabled', false), fn ($query) => $query
+                ->where($taxonomyItemsTable.'.'.$tenantColumn, $teamId)
+                ->where($taxonomiesTable.'.'.$tenantColumn, $teamId))
+            ->whereIn($taxonomiesTable.'.type', $types)
+            ->where($taxonomyItemsTable.'.slug', Str::slug($taxonomySlug))
             ->first([
-                'taxonomy_items.id',
-                'taxonomy_items.name',
-                'taxonomy_items.slug',
-                'taxonomies.type',
+                $taxonomyItemsTable.'.id',
+                $taxonomyItemsTable.'.name',
+                $taxonomyItemsTable.'.slug',
+                $taxonomiesTable.'.type',
             ]) ?? abort(404);
     }
 
@@ -117,7 +129,10 @@ final class OrganizationPostTaxonomyController
         $model = $this->pageModel();
 
         return $model::query()
-            ->forTeam((int) $organization->getAttribute($this->organizationTeamColumn()))
+            ->where(
+                (string) config('corexis.tenancy.id_column', 'team_id'),
+                (int) $organization->getAttribute($this->organizationTeamColumn()),
+            )
             ->published()
             ->ordered()
             ->get();
@@ -125,8 +140,8 @@ final class OrganizationPostTaxonomyController
 
     private function pageModel(): string
     {
-        $model = config('blog.public_organization.page_model');
-        abort_unless(is_string($model) && is_subclass_of($model, Model::class), 404);
+        $model = BlogConfigResolver::publicOrganizationPageModel();
+        abort_unless($model !== null, 404);
 
         return $model;
     }

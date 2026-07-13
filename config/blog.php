@@ -1,7 +1,6 @@
 <?php
 
 use IvanBaric\Blog\Models\Post;
-use IvanBaric\Pages\Models\Page;
 
 return [
     'tables' => [
@@ -10,19 +9,18 @@ return [
 
     'models' => [
         'post' => Post::class,
+        'user' => null,
     ],
-
-    'team_resolver' => class_exists('App\\Resolvers\\TeamResolver') ? 'App\\Resolvers\\TeamResolver' : null,
 
     'contexts' => [
         'blog' => ['label' => 'Blog'],
-        'news' => ['label' => 'News'],
-        'event' => ['label' => 'Events'],
-        'project' => ['label' => 'Projects'],
-        'fair' => ['label' => 'Fairs'],
-        'competition' => ['label' => 'Competitions'],
-        'award' => ['label' => 'Awards'],
-        'announcement' => ['label' => 'Announcements'],
+        'news' => ['label' => 'Novosti'],
+        'event' => ['label' => 'Događaji'],
+        'project' => ['label' => 'Projekti'],
+        'fair' => ['label' => 'Sajmovi'],
+        'competition' => ['label' => 'Natjecanja'],
+        'award' => ['label' => 'Nagrade'],
+        'announcement' => ['label' => 'Najave'],
     ],
 
     'default_context' => 'blog',
@@ -46,52 +44,33 @@ return [
         'organization_slug_column' => 'slug',
         'organization_team_column' => 'team_id',
         'organization_active_scope' => 'active',
-        'page_model' => Page::class,
+        'page_model' => class_exists('IvanBaric\\Pages\\Models\\Page') ? 'IvanBaric\\Pages\\Models\\Page' : null,
         'page_key' => 'posts',
+        'post_page_slugs' => ['posts', 'objave'],
+        'content_route_name' => 'public.organization.content',
+        'page_route_name' => 'public.organization.page',
+        'taxonomy_route_name' => 'public.organization.posts.taxonomy',
         'post_taxonomy_view' => 'blog::public.organization-content.post-taxonomy',
         'post_single_view' => 'blog::public.organization-content.post',
     ],
 
     'pagination' => [
-        'admin' => 15,
         'public' => 12,
     ],
 
     'translatable' => [
-        'enabled' => true,
-        'fields' => ['title', 'excerpt', 'content'],
         'default_locale' => null,
     ],
 
-    'slug' => [
-        'source' => 'title',
-        'column' => 'slug',
-        'scoped_to_team' => true,
-        'sanigen' => [
-            'generator' => null,
-            'method' => 'generate',
-        ],
-    ],
-
-    'taxonomy' => [
-        'enabled' => true,
-        'trait' => 'IvanBaric\\Taxonomy\\Traits\\HasTaxonomies',
-        'filter_parameter' => 'taxonomy',
-    ],
-
     'seo' => [
-        'enabled' => true,
-        'trait' => 'IvanBaric\\Seo\\Concerns\\HasSeo',
+        'canonical_route_name' => 'posts.show',
     ],
 
     'media' => [
         'enabled' => true,
-        'gallery_trait' => 'IvanBaric\\Gallery\\Concerns\\HasGallery',
-        'featured_image_column' => 'featured_image',
     ],
 
     'admin_ui' => [
-        'enabled' => true,
         'layout' => 'layouts.app',
     ],
 
@@ -115,14 +94,6 @@ return [
 
     'features' => [
         'admin_routes' => true,
-        'soft_deletes' => true,
         'featured_posts' => true,
-        'scheduled_posts' => true,
-        'events' => true,
-        'location' => true,
-        'sort_order' => true,
-        'taxonomy_filters' => true,
-        'seo' => true,
-        'media' => true,
     ],
 ];

@@ -49,7 +49,9 @@ abstract class TestCase extends Orchestra
             });
         }
 
-        $this->loadMigrationsFrom(__DIR__.'/../../taxonomy/database/migrations');
+        $taxonomyMigration = require __DIR__.'/../../taxonomy/database/migrations/2025_12_14_000000_create_taxonomy_table.php';
+        $taxonomyMigration->up();
+
         $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
     }
 }

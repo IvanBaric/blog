@@ -4,16 +4,18 @@ namespace IvanBaric\Blog\Models;
 
 use Illuminate\Database\Eloquent\Attributes\Scope;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\Concerns\HasUuids;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\SoftDeletes;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Route;
+use IvanBaric\Blog\Support\BlogConfigResolver;
+use IvanBaric\Blog\Support\BlogModels;
+use IvanBaric\Corexis\Concerns\BelongsToTenant;
 use IvanBaric\Corexis\Concerns\HasLockVersion;
-use IvanBaric\Blog\Support\SlugGenerator;
-use IvanBaric\Blog\Support\TeamResolver;
+use IvanBaric\Corexis\Concerns\HasUniqueSlug;
+use IvanBaric\Corexis\Concerns\HasUuid;
 use IvanBaric\Gallery\Concerns\HasGalleries;
 use IvanBaric\Taxonomy\Traits\HasTaxonomies;
 
@@ -21,6 +23,7 @@ use IvanBaric\Taxonomy\Traits\HasTaxonomies;
  * @property int $id
  * @property int|null $team_id
  * @property int|null $user_id
+ * @property int|null $updated_user_id
  * @property string $uuid
  * @property string $slug
  * @property array<string, mixed>|string $title
@@ -28,7 +31,6 @@ use IvanBaric\Taxonomy\Traits\HasTaxonomies;
  * @property array<string, mixed>|string|null $content
  * @property string $context
  * @property string $status
- * @property string|null $featured_image
  * @property Carbon|null $published_at
  * @property Carbon|null $starts_at
  * @property Carbon|null $ends_at
@@ -39,53 +41,26 @@ use IvanBaric\Taxonomy\Traits\HasTaxonomies;
  */
 class Post extends Model
 {
-    use HasFactory, HasGalleries, HasLockVersion, HasTaxonomies, HasUuids, SoftDeletes;
+    use BelongsToTenant, HasFactory, HasGalleries, HasLockVersion, HasTaxonomies, HasUniqueSlug, HasUuid, SoftDeletes;
+
+    public const FEATURED_IMAGE_COLLECTION = 'featured_image';
 
     protected $guarded = ['id'];
 
     public function getTable(): string
     {
-        return config('blog.tables.posts', 'blog_posts');
-    }
-
-    public function getRouteKeyName(): string
-    {
-        return 'uuid';
-    }
-
-    /**
-     * @return array<int, string>
-     */
-    public function uniqueIds(): array
-    {
-        return ['uuid'];
+        return BlogConfigResolver::postsTable();
     }
 
     protected static function booted(): void
     {
         static::creating(function (self $post): void {
-            $attributes = $post->getAttributes();
-
-            if (! ($attributes['context'] ?? null)) {
+            if (! $post->getAttribute('context')) {
                 $post->setAttribute('context', config('blog.default_context', 'blog'));
             }
 
-            if (! ($attributes['status'] ?? null)) {
+            if (! $post->getAttribute('status')) {
                 $post->setAttribute('status', config('blog.default_status', 'draft'));
-            }
-
-            if (! ($attributes['team_id'] ?? null)) {
-                $post->setAttribute('team_id', app(TeamResolver::class)->resolve());
-            }
-
-            if (! ($attributes['user_id'] ?? null) && Auth::check()) {
-                $post->setAttribute('user_id', Auth::id());
-            }
-        });
-
-        static::saving(function (self $post): void {
-            if (! $post->slug || $post->isDirty('title')) {
-                $post->slug = app(SlugGenerator::class)->generate($post, $post->localized('title'));
             }
         });
     }
@@ -97,6 +72,7 @@ class Post extends Model
     {
         return [
             'user_id' => 'integer',
+            'updated_user_id' => 'integer',
             'title' => 'array',
             'excerpt' => 'array',
             'content' => 'array',
@@ -112,9 +88,12 @@ class Post extends Model
 
     public function author(): BelongsTo
     {
-        $userModel = config('auth.providers.users.model', \App\Models\User::class);
+        return $this->belongsTo(BlogModels::user(), 'user_id');
+    }
 
-        return $this->belongsTo($userModel, 'user_id');
+    public function updatedBy(): BelongsTo
+    {
+        return $this->belongsTo(BlogModels::user(), 'updated_user_id');
     }
 
     #[Scope]
@@ -139,7 +118,8 @@ class Post extends Model
     #[Scope]
     protected function featured(Builder $query): void
     {
-        $query->where('is_featured', true);
+        $query->where('is_featured', true)
+            ->where('status', 'published');
     }
 
     #[Scope]
@@ -148,10 +128,9 @@ class Post extends Model
         $query->orderBy('sort_order')->orderByDesc('published_at')->orderByDesc('created_at');
     }
 
-    #[Scope]
-    protected function forTeam(Builder $query, ?int $teamId): void
+    public function slugSource(): string
     {
-        $teamId === null ? $query->whereNull('team_id') : $query->where('team_id', $teamId);
+        return $this->localized('title');
     }
 
     public function isPublished(): bool
@@ -162,6 +141,11 @@ class Post extends Model
     public function isDraft(): bool
     {
         return $this->status === 'draft';
+    }
+
+    public function isArchived(): bool
+    {
+        return $this->status === 'archived';
     }
 
     public function publish(?Carbon $publishedAt = null): bool
@@ -177,22 +161,36 @@ class Post extends Model
         return $this->forceFill([
             'status' => 'draft',
             'published_at' => null,
+            'is_featured' => false,
         ])->save();
+    }
+
+    public function archive(int|string|null $archiverId = null): bool
+    {
+        $attributes = [
+            'status' => 'archived',
+            'is_featured' => false,
+        ];
+
+        if ($archiverId !== null) {
+            $attributes['updated_user_id'] = $archiverId;
+        }
+
+        return $this->forceFill($attributes)->save();
     }
 
     public function markAsFeatured(): bool
     {
+        if ($this->status !== 'published') {
+            return false;
+        }
+
         return $this->forceFill(['is_featured' => true])->save();
     }
 
     public function unmarkAsFeatured(): bool
     {
         return $this->forceFill(['is_featured' => false])->save();
-    }
-
-    public function getSlugSourceAttribute(): string
-    {
-        return $this->localized('title');
     }
 
     public function localized(string $field, ?string $locale = null): string
@@ -203,7 +201,7 @@ class Post extends Model
             return (string) $value;
         }
 
-        $locale ??= static::currentLocaleCode();
+        $locale ??= self::currentLocaleCode();
         $fallback = config('blog.translatable.default_locale') ?: config('app.fallback_locale', 'en');
 
         return (string) ($value[$locale] ?? $value[$fallback] ?? reset($value) ?: '');
@@ -222,18 +220,27 @@ class Post extends Model
         return [
             'title' => $this->localized('title'),
             'description' => str($this->localized('content'))->stripTags()->squish()->limit(160)->toString(),
-            'image' => $this->featured_image,
+            'image' => $this->seoImageUrl(),
         ];
     }
 
     public function seoCanonicalUrl(): ?string
     {
-        return $this->exists ? route('posts.show', $this) : null;
+        $routeName = (string) config('blog.seo.canonical_route_name', 'posts.show');
+
+        return $this->exists && $routeName !== '' && Route::has($routeName)
+            ? route($routeName, $this)
+            : null;
     }
 
     public function seoImageUrl(): ?string
     {
-        return $this->featured_image;
+        return $this->featuredImageUrl('large');
+    }
+
+    public function featuredImageUrl(string $conversion = 'large'): ?string
+    {
+        return $this->galleryImageUrl(self::FEATURED_IMAGE_COLLECTION, $conversion);
     }
 
     public function shouldBeIndexed(): bool

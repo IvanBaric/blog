@@ -6,18 +6,19 @@ namespace IvanBaric\Blog\Livewire\Admin;
 
 use Flux\Flux;
 use Illuminate\Contracts\View\View;
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Pagination\Paginator;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 use IvanBaric\Blog\Actions\Taxonomies\CreateTaxonomyItemAction;
 use IvanBaric\Blog\Actions\Taxonomies\DeleteTaxonomyItemAction;
 use IvanBaric\Blog\Actions\Taxonomies\UpdateTaxonomyItemAction;
-use IvanBaric\Blog\Data\ActionResult;
 use IvanBaric\Blog\Livewire\Forms\TaxonomyItemForm;
-use IvanBaric\Blog\Support\TeamResolver;
+use IvanBaric\Blog\Support\BlogModels;
+use IvanBaric\Corexis\Data\ActionResult;
 use IvanBaric\Taxonomy\Models\Taxonomy;
 use IvanBaric\Taxonomy\Models\TaxonomyItem;
+use IvanBaric\Taxonomy\Support\TaxonomyModels;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Locked;
 use Livewire\Component;
@@ -26,6 +27,8 @@ use Livewire\WithPagination;
 final class PostTaxonomies extends Component
 {
     use WithPagination;
+
+    private ?Taxonomy $resolvedTaxonomy = null;
 
     #[Locked]
     public string $type = 'category';
@@ -57,10 +60,12 @@ final class PostTaxonomies extends Component
 
     public function save(CreateTaxonomyItemAction $createTaxonomyItem): void
     {
+        corexis_authorize('blog.create', $this->currentTeamId());
+
         try {
             $data = $this->createForm->data();
         } catch (ValidationException $exception) {
-            $this->toastFromResult(ActionResult::failure(__('Provjerite obavezna polja i pokušajte ponovno.')));
+            $this->toastFromResult(ActionResult::error(__('Provjerite obavezna polja i pokušajte ponovno.')));
 
             throw $exception;
         }
@@ -73,29 +78,57 @@ final class PostTaxonomies extends Component
 
         $this->toastFromResult($result);
 
-        if (! $result->successful) {
+        if (! $result->success) {
             return;
         }
 
         $this->createForm->resetForm();
         unset($this->items, $this->totalItems);
         $this->dispatch('changed');
+
+        Flux::modal('taxonomy-create')->close();
+    }
+
+    public function openCreate(): void
+    {
+        $this->createForm->resetForm();
+
+        Flux::modal('taxonomy-create')->show();
+    }
+
+    public function cancelCreate(): void
+    {
+        $this->createForm->resetForm();
     }
 
     public function edit(string $uuid): void
     {
+        corexis_authorize('blog.update', $this->currentTeamId());
+
         $item = $this->findItem($uuid);
 
-        $this->editingItemUuid = (string) $item->uuid;
+        $this->reset('editingItemUuid');
+        $this->editForm->resetForm();
+        $this->editingItemUuid = (string) $item->getAttribute('uuid');
         $this->editForm->fillFromModel($item);
+
+        Flux::modal('taxonomy-edit')->show();
+    }
+
+    public function cancelEdit(): void
+    {
+        $this->reset('editingItemUuid');
+        $this->editForm->resetForm();
     }
 
     public function update(UpdateTaxonomyItemAction $updateTaxonomyItem): void
     {
+        corexis_authorize('blog.update', $this->currentTeamId());
+
         try {
             $data = $this->editForm->data();
         } catch (ValidationException $exception) {
-            $this->toastFromResult(ActionResult::failure(__('Provjerite obavezna polja i pokušajte ponovno.')));
+            $this->toastFromResult(ActionResult::error(__('Provjerite obavezna polja i pokušajte ponovno.')));
 
             throw $exception;
         }
@@ -108,7 +141,7 @@ final class PostTaxonomies extends Component
 
         $this->toastFromResult($result);
 
-        if (! $result->successful) {
+        if (! $result->success) {
             return;
         }
 
@@ -122,11 +155,22 @@ final class PostTaxonomies extends Component
 
     public function confirmDelete(string $uuid): void
     {
-        $this->deletingItemUuid = (string) $this->findItem($uuid)->uuid;
+        corexis_authorize('blog.delete', $this->currentTeamId());
+
+        $this->deletingItemUuid = (string) $this->findItem($uuid)->getAttribute('uuid');
+
+        Flux::modal('taxonomy-delete')->show();
+    }
+
+    public function cancelDelete(): void
+    {
+        $this->reset('deletingItemUuid');
     }
 
     public function delete(DeleteTaxonomyItemAction $deleteTaxonomyItem): void
     {
+        corexis_authorize('blog.delete', $this->currentTeamId());
+
         $result = $deleteTaxonomyItem->execute(
             item: $this->findItem((string) $this->deletingItemUuid),
             type: $this->type,
@@ -134,7 +178,7 @@ final class PostTaxonomies extends Component
 
         $this->toastFromResult($result);
 
-        if (! $result->successful) {
+        if (! $result->success) {
             return;
         }
 
@@ -149,22 +193,25 @@ final class PostTaxonomies extends Component
     #[Computed]
     public function items(): Paginator
     {
+        $taxonomyItemModel = TaxonomyModels::taxonomyItem();
         $postMorphClass = $this->postMorphClass();
         $sortField = in_array($this->sortField, ['name', 'posts'], true) ? $this->sortField : 'name';
         $sortDirection = $this->sortDirection === 'desc' ? 'desc' : 'asc';
+        $teamId = $this->currentTeamId();
+        $tenantColumn = (string) config('corexis.tenancy.id_column', 'team_id');
+        $scopePivotTenant = config('corexis.tenancy.enabled', false) && Schema::hasColumn('taxonomyables', $tenantColumn);
 
-        return TaxonomyItem::query()
+        return $taxonomyItemModel::query()
             ->where('taxonomy_id', $this->taxonomy()->id)
-            ->when($postMorphClass !== null, function ($query) use ($postMorphClass): void {
-                $query->select('taxonomy_items.*')
-                    ->selectSub(
-                        DB::table('taxonomyables')
-                            ->selectRaw('count(*)')
-                            ->whereColumn('taxonomyables.taxonomy_item_id', 'taxonomy_items.id')
-                            ->where('taxonomyables.taxonomyable_type', $postMorphClass),
-                        'posts_count'
-                    );
-            })
+            ->select('taxonomy_items.*')
+            ->selectSub(
+                DB::table('taxonomyables')
+                    ->selectRaw('count(*)')
+                    ->whereColumn('taxonomyables.taxonomy_item_id', 'taxonomy_items.id')
+                    ->where('taxonomyables.taxonomyable_type', $postMorphClass)
+                    ->when($scopePivotTenant, fn ($query) => $query->where('taxonomyables.'.$tenantColumn, $teamId)),
+                'posts_count'
+            )
             ->when($this->search !== '', function ($query): void {
                 $search = trim($this->search);
 
@@ -174,7 +221,7 @@ final class PostTaxonomies extends Component
                 });
             })
             ->when(
-                $sortField === 'posts' && $postMorphClass !== null,
+                $sortField === 'posts',
                 fn ($query) => $query->orderBy('posts_count', $sortDirection)->orderBy('name'),
                 fn ($query) => $query->orderBy('name', $sortDirection)
             )
@@ -184,7 +231,9 @@ final class PostTaxonomies extends Component
     #[Computed]
     public function totalItems(): int
     {
-        return TaxonomyItem::query()
+        $taxonomyItemModel = TaxonomyModels::taxonomyItem();
+
+        return $taxonomyItemModel::query()
             ->where('taxonomy_id', $this->taxonomy()->id)
             ->count();
     }
@@ -233,14 +282,17 @@ final class PostTaxonomies extends Component
 
         $postMorphClass = $this->postMorphClass();
 
-        if ($postMorphClass === null) {
-            return 0;
+        $query = DB::table('taxonomyables')
+            ->where('taxonomy_item_id', $item->getKey())
+            ->where('taxonomyable_type', $postMorphClass);
+
+        $tenantColumn = (string) config('corexis.tenancy.id_column', 'team_id');
+
+        if (config('corexis.tenancy.enabled', false) && Schema::hasColumn('taxonomyables', $tenantColumn)) {
+            $query->where($tenantColumn, $this->currentTeamId());
         }
 
-        return DB::table('taxonomyables')
-            ->where('taxonomy_item_id', $item->getKey())
-            ->where('taxonomyable_type', $postMorphClass)
-            ->count();
+        return $query->count();
     }
 
     public function render(): View
@@ -265,8 +317,20 @@ final class PostTaxonomies extends Component
 
     private function taxonomy(): Taxonomy
     {
-        return Taxonomy::query()->firstOrCreate(
-            ['type' => $this->type, 'slug' => $this->type === 'category' ? 'kategorije' : 'oznake'],
+        if ($this->resolvedTaxonomy?->exists) {
+            return $this->resolvedTaxonomy;
+        }
+
+        $identity = ['type' => $this->type, 'slug' => $this->type === 'category' ? 'kategorije' : 'oznake'];
+
+        if (config('corexis.tenancy.enabled', false)) {
+            $identity[(string) config('corexis.tenancy.id_column', 'team_id')] = $this->currentTeamId();
+        }
+
+        $taxonomyModel = TaxonomyModels::taxonomy();
+
+        return $this->resolvedTaxonomy = $taxonomyModel::query()->firstOrCreate(
+            $identity,
             [
                 'name' => $this->title(),
                 'is_filterable' => true,
@@ -277,29 +341,30 @@ final class PostTaxonomies extends Component
 
     private function findItem(string $uuid): TaxonomyItem
     {
-        return TaxonomyItem::query()
+        $taxonomyItemModel = TaxonomyModels::taxonomyItem();
+
+        return $taxonomyItemModel::query()
             ->where('taxonomy_id', $this->taxonomy()->id)
             ->where('uuid', $uuid)
             ->firstOrFail();
     }
 
-    private function postMorphClass(): ?string
+    private function postMorphClass(): string
     {
-        $postModel = config('blog.models.post');
-        $post = is_string($postModel) && is_subclass_of($postModel, Model::class)
-            ? new $postModel
-            : null;
+        $postModel = BlogModels::post();
 
-        return $post instanceof Model ? $post->getMorphClass() : null;
+        return (new $postModel)->getMorphClass();
     }
 
     private function currentTeamId(): ?int
     {
-        return app(TeamResolver::class)->resolve();
+        $tenantId = corexis_tenant_id();
+
+        return is_numeric($tenantId) ? (int) $tenantId : null;
     }
 
     private function toastFromResult(ActionResult $result): void
     {
-        Flux::toast(variant: $result->successful ? 'success' : 'danger', text: $result->message);
+        Flux::toast(variant: $result->success ? 'success' : 'danger', text: $result->message);
     }
 }

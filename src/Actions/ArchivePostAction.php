@@ -6,9 +6,10 @@ namespace IvanBaric\Blog\Actions;
 
 use Illuminate\Support\Facades\DB;
 use IvanBaric\Blog\Actions\Concerns\AuthorizesBlogActions;
-use IvanBaric\Blog\Data\ActionResult;
 use IvanBaric\Blog\Events\PostArchived;
+use IvanBaric\Blog\Events\PostUnfeatured;
 use IvanBaric\Blog\Models\Post;
+use IvanBaric\Corexis\Data\ActionResult;
 
 final class ArchivePostAction
 {
@@ -20,19 +21,27 @@ final class ArchivePostAction
             return $result;
         }
 
-        $post = DB::transaction(function () use ($post): Post {
+        $wasFeatured = (bool) $post->is_featured;
+
+        $archiverId = corexis_actor_id();
+
+        $post = DB::transaction(function () use ($post, $archiverId): Post {
             /** @var Post $post */
-            $post = Post::query()
+            $post = $post->newQuery()
                 ->whereKey($post->getKey())
                 ->lockForUpdate()
                 ->firstOrFail();
 
-            $post->forceFill(['status' => 'archived'])->save();
+            $post->archive($archiverId);
 
             return $post->refresh();
         });
 
         PostArchived::dispatch($post);
+
+        if ($wasFeatured) {
+            PostUnfeatured::dispatch($post);
+        }
 
         return ActionResult::success(__('Objava je arhivirana.'), $post);
     }

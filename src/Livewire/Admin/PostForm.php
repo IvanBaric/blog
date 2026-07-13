@@ -5,21 +5,29 @@ declare(strict_types=1);
 namespace IvanBaric\Blog\Livewire\Admin;
 
 use Flux\Flux;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use IvanBaric\Blog\Actions\ArchivePostAction;
+use IvanBaric\Blog\Actions\DeletePostAction;
+use IvanBaric\Blog\Actions\PublishPostAction;
 use IvanBaric\Blog\Actions\SavePostAction;
-use IvanBaric\Blog\Data\ActionResult;
 use IvanBaric\Blog\Livewire\Forms\PostFormState;
 use IvanBaric\Blog\Models\Post;
-use IvanBaric\Blog\Support\TeamResolver;
-use IvanBaric\Taxonomy\Models\Taxonomy;
+use IvanBaric\Blog\Support\BlogConfigResolver;
+use IvanBaric\Blog\Support\BlogModels;
+use IvanBaric\Blog\Support\RichTextSanitizer;
+use IvanBaric\Corexis\Data\ActionResult;
 use IvanBaric\Taxonomy\Models\TaxonomyItem;
+use IvanBaric\Taxonomy\Support\TaxonomyModels;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Locked;
+use Livewire\Attributes\On;
 use Livewire\Component;
+use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
 use Livewire\WithFileUploads;
 
 final class PostForm extends Component
@@ -29,6 +37,7 @@ final class PostForm extends Component
     #[Locked]
     public ?Post $post = null;
 
+    #[Locked]
     public string $locale = 'en';
 
     public PostFormState $form;
@@ -43,6 +52,24 @@ final class PostForm extends Component
 
     public ?string $publishedTime = null;
 
+    #[Locked]
+    public array $savedStateSnapshot = [];
+
+    #[Locked]
+    public ?string $lastSavedAt = null;
+
+    #[Locked]
+    public ?string $lastSavedBy = null;
+
+    #[Locked]
+    public ?string $deletingPostUuid = null;
+
+    #[Locked]
+    public ?string $restoringPostUuid = null;
+
+    #[Locked]
+    public ?string $archivingPostUuid = null;
+
     public function mount(?Post $post = null): void
     {
         corexis_authorize($post?->exists ? 'blog.update' : 'blog.create', $post?->exists ? $post : []);
@@ -53,25 +80,295 @@ final class PostForm extends Component
         if ($post?->exists) {
             $post = $this->postForCurrentTeam((string) $post->uuid);
             $this->post = $post;
-            abort_unless((int) $post->getAttribute('team_id') === $this->currentTeamId(), 404);
             $this->form->fillFromPost($post, $this->locale);
         }
 
         $this->syncPublishedFieldsFromForm();
+        $this->captureSavedStateSnapshot();
     }
 
     public function save(SavePostAction $savePostAction): void
     {
+        if ($this->post?->status === 'archived') {
+            Flux::toast(variant: 'danger', text: __('Arhivirana objava je zaključana. Prvo je vratite u skicu.'));
+
+            return;
+        }
+
+        if ($this->post?->exists && $this->form->status === 'archived') {
+            $this->confirmArchive();
+
+            return;
+        }
+
+        if ($this->post?->exists && ! $this->isDirty()) {
+            Flux::toast(variant: 'info', text: __('Nema promjena za spremanje.'));
+
+            return;
+        }
+
+        $this->persistPost($savePostAction, redirectAfterCreate: true);
+    }
+
+    public function confirmArchive(): void
+    {
+        if (! $this->post?->exists || $this->post->status === 'archived') {
+            return;
+        }
+
+        $post = $this->postForCurrentTeam((string) $this->post->uuid);
+
+        if ($post->status === 'archived') {
+            Flux::toast(variant: 'danger', text: __('Objava je već arhivirana. Osvježite stranicu.'));
+
+            return;
+        }
+
+        $this->archivingPostUuid = (string) $post->uuid;
+
+        Flux::modal('post-detail-archive-confirm')->show();
+    }
+
+    public function cancelArchive(): void
+    {
+        $this->reset('archivingPostUuid');
+
+        if ($this->post?->exists && $this->post->status !== 'archived') {
+            $this->form->status = $this->postForCurrentTeam((string) $this->post->uuid)->status;
+        }
+    }
+
+    public function archiveAndSave(SavePostAction $savePostAction, ArchivePostAction $archivePostAction): void
+    {
+        if (! $this->archivingPostUuid || ! $this->post?->exists) {
+            return;
+        }
+
+        $post = $this->postForCurrentTeam($this->archivingPostUuid);
+
+        if ($post->status === 'archived' || (string) $post->uuid !== (string) $this->post->uuid) {
+            $this->reset('archivingPostUuid');
+            Flux::modal('post-detail-archive-confirm')->close();
+            Flux::toast(variant: 'danger', text: __('Status objave promijenjen je u međuvremenu. Osvježite stranicu i pokušajte ponovno.'));
+
+            return;
+        }
+
+        $this->form->status = $post->status;
+
+        if (! $this->persistPost($savePostAction, redirectAfterCreate: false, showSuccessToast: false)) {
+            $this->form->status = 'archived';
+            $this->reset('archivingPostUuid');
+            Flux::modal('post-detail-archive-confirm')->close();
+
+            return;
+        }
+
+        $result = $archivePostAction->handle($this->postForCurrentTeam((string) $post->uuid));
+
+        if (! $result->success) {
+            $this->reset('archivingPostUuid');
+            Flux::modal('post-detail-archive-confirm')->close();
+            $this->toastFromResult($result);
+
+            return;
+        }
+
+        $this->reset('archivingPostUuid');
+        Flux::modal('post-detail-archive-confirm')->close();
+        $this->toastFromResult($result);
+        $this->redirectRoute(
+            config('blog.routes.admin_name_prefix', 'admin.blog.').'edit',
+            ['post' => $post->uuid],
+        );
+    }
+
+    public function autoSave(SavePostAction $savePostAction): void
+    {
+        if (! $this->post?->exists || $this->post->status === 'archived' || $this->form->status === 'archived' || ! $this->isDirty()) {
+            return;
+        }
+
+        $this->persistPost(
+            savePostAction: $savePostAction,
+            redirectAfterCreate: false,
+            successToastMessage: __('Automatsko spremanje podataka'),
+            showValidationToast: false,
+        );
+    }
+
+    public function isDirty(): bool
+    {
+        if ($this->post?->status === 'archived') {
+            return false;
+        }
+
+        if (! $this->post?->exists) {
+            return true;
+        }
+
+        $this->syncFormPublishedAt();
+
+        return $this->currentStateSnapshot() !== $this->savedStateSnapshot;
+    }
+
+    public function confirmRestore(): void
+    {
+        if (! $this->post?->exists || $this->post->status !== 'archived') {
+            return;
+        }
+
+        $post = $this->postForCurrentTeam((string) $this->post->uuid);
+
+        if ($post->status !== 'archived') {
+            Flux::toast(variant: 'danger', text: __('Status objave promijenjen je u međuvremenu. Osvježite stranicu i pokušajte ponovno.'));
+
+            return;
+        }
+
+        $this->restoringPostUuid = (string) $post->uuid;
+
+        Flux::modal('post-detail-restore-confirm')->show();
+    }
+
+    public function cancelRestore(): void
+    {
+        $this->reset('restoringPostUuid');
+    }
+
+    public function restoreFromArchive(PublishPostAction $publishPostAction): void
+    {
+        if (! $this->restoringPostUuid || ! $this->post?->exists) {
+            return;
+        }
+
+        $post = $this->postForCurrentTeam($this->restoringPostUuid);
+
+        if ($post->status !== 'archived' || (string) $post->uuid !== (string) $this->post->uuid) {
+            $this->cancelRestore();
+            Flux::modal('post-detail-restore-confirm')->close();
+            Flux::toast(variant: 'danger', text: __('Status objave promijenjen je u međuvremenu. Osvježite stranicu i pokušajte ponovno.'));
+
+            return;
+        }
+
+        $result = $publishPostAction->handle($post, false);
+
+        if (! $result->success || ! $result->data instanceof Post) {
+            $this->cancelRestore();
+            Flux::modal('post-detail-restore-confirm')->close();
+            $this->toastFromResult($result);
+
+            return;
+        }
+
+        $uuid = (string) $result->data->uuid;
+
+        $this->cancelRestore();
+        Flux::modal('post-detail-restore-confirm')->close();
+        $this->toastFromResult($result);
+        $this->redirectRoute(
+            config('blog.routes.admin_name_prefix', 'admin.blog.').'edit',
+            ['post' => $uuid],
+        );
+    }
+
+    public function confirmDelete(): void
+    {
+        if (! $this->post?->exists) {
+            return;
+        }
+
+        $post = $this->postForCurrentTeam((string) $this->post->uuid);
+
+        if ($post->status !== 'archived') {
+            Flux::toast(variant: 'danger', text: __('Samo arhivirana objava može se izbrisati iz ovog prikaza.'));
+
+            return;
+        }
+
+        $this->deletingPostUuid = (string) $post->uuid;
+
+        Flux::modal('post-detail-delete-confirm')->show();
+    }
+
+    public function cancelDelete(): void
+    {
+        $this->reset('deletingPostUuid');
+    }
+
+    public function delete(DeletePostAction $deletePostAction): void
+    {
+        if (! $this->deletingPostUuid || ! $this->post?->exists) {
+            return;
+        }
+
+        $post = $this->postForCurrentTeam($this->deletingPostUuid);
+
+        if ($post->status !== 'archived' || (string) $post->uuid !== (string) $this->post->uuid) {
+            $this->cancelDelete();
+            Flux::modal('post-detail-delete-confirm')->close();
+            Flux::toast(variant: 'danger', text: __('Status objave promijenjen je u međuvremenu. Osvježite stranicu i pokušajte ponovno.'));
+
+            return;
+        }
+
+        $result = $deletePostAction->handle($post);
+
+        if (! $result->success) {
+            $this->cancelDelete();
+            Flux::modal('post-detail-delete-confirm')->close();
+            $this->toastFromResult($result);
+
+            return;
+        }
+
+        $this->reset('deletingPostUuid');
+        Flux::toast(
+            heading: __('Objava izbrisana'),
+            text: __('Objava je uspješno uklonjena iz administracije.'),
+            variant: 'success',
+        );
+        $this->skipRender();
+        $this->redirectRoute(config('blog.routes.admin_name_prefix', 'admin.blog.').'index', navigate: true);
+    }
+
+    #[On('gallery-attached')]
+    #[On('gallery-detached')]
+    public function refreshGallerySummary(string $collection = ''): void
+    {
+        if ($collection === 'images') {
+            unset($this->gallerySummary);
+        }
+    }
+
+    private function persistPost(
+        SavePostAction $savePostAction,
+        bool $redirectAfterCreate,
+        ?string $successToastMessage = null,
+        bool $showValidationToast = true,
+        bool $showSuccessToast = true,
+    ): bool {
         $this->syncFormPublishedAt();
 
         try {
-            $data = $this->form->data($this->currentTeamId());
+            $data = $this->form->data();
         } catch (ValidationException $exception) {
-            $this->toastFromResult(ActionResult::failure(__('Provjerite obavezna polja i pokušajte ponovno.')));
+            if ($showValidationToast) {
+                $this->toastFromResult(ActionResult::error(corexis_validation_toast_message(
+                    $exception,
+                    __('Provjerite obavezna polja i pokušajte ponovno.'),
+                )));
+            }
+
+            if (! $showValidationToast) {
+                return false;
+            }
 
             throw $exception;
         }
 
+        $wasExistingPost = (bool) $this->post?->exists;
         $post = $this->post?->exists ? $this->postForCurrentTeam((string) $this->post->uuid) : null;
         $result = $savePostAction->handle(
             post: $post,
@@ -81,33 +378,60 @@ final class PostForm extends Component
             locale: $this->locale,
         );
 
-        if (! $result->successful) {
-            foreach ($result->data?->messages() ?? [] as $field => $messages) {
-                $this->addError($field, $messages[0]);
+        if (! $result->success) {
+            foreach ($result->errors as $field => $messages) {
+                $this->addError($this->formErrorKey((string) $field), $messages[0] ?? $result->message);
             }
 
             $this->toastFromResult($result);
 
-            return;
+            return false;
         }
 
         $this->post = $result->data;
         $this->form->fillFromPost($this->post, $this->locale);
         $this->syncPublishedFieldsFromForm();
+        $this->captureSavedStateSnapshot();
 
-        $this->toastFromResult($result);
-        $this->redirectRoute(config('blog.routes.admin_name_prefix', 'admin.blog.').'edit', ['post' => $this->post->uuid], navigate: true);
+        if ($showSuccessToast) {
+            $successToastMessage === null
+                ? $this->toastFromResult($result)
+                : Flux::toast(variant: 'info', text: $successToastMessage);
+        }
+
+        if ($redirectAfterCreate && ! $wasExistingPost) {
+            $this->redirectRoute(config('blog.routes.admin_name_prefix', 'admin.blog.').'edit', ['post' => $this->post->uuid], navigate: true);
+        }
+
+        return true;
+    }
+
+    private function formErrorKey(string $field): string
+    {
+        return match ($field) {
+            'title' => 'form.title.'.$this->locale,
+            'content' => 'form.content.'.$this->locale,
+            'status' => 'form.status',
+            'featuredImageUpload' => 'form.featuredImageUpload',
+            default => str_starts_with($field, 'form.') ? $field : 'form.'.$field,
+        };
     }
 
     public function createCategory(): void
     {
+        if ($this->post?->status === 'archived') {
+            return;
+        }
+
+        corexis_authorize($this->post?->exists ? 'blog.update' : 'blog.create', $this->post?->exists ? $this->post : []);
+
         $category = $this->createTaxonomyItem('category', $this->categorySearch, __('Kategorije'), false);
 
         if (! $category->exists) {
             return;
         }
 
-        $categoryUuid = (string) $category->uuid;
+        $categoryUuid = (string) $category->getAttribute('uuid');
 
         if (! in_array($categoryUuid, $this->form->categoryUuids, true)) {
             $this->form->categoryUuids[] = $categoryUuid;
@@ -118,13 +442,19 @@ final class PostForm extends Component
 
     public function createTag(): void
     {
+        if ($this->post?->status === 'archived') {
+            return;
+        }
+
+        corexis_authorize($this->post?->exists ? 'blog.update' : 'blog.create', $this->post?->exists ? $this->post : []);
+
         $tag = $this->createTaxonomyItem('tags', $this->tagSearch, __('Oznake'), true);
 
         if (! $tag->exists) {
             return;
         }
 
-        $tagUuid = (string) $tag->uuid;
+        $tagUuid = (string) $tag->getAttribute('uuid');
 
         if (! in_array($tagUuid, $this->form->tagUuids, true)) {
             $this->form->tagUuids[] = $tagUuid;
@@ -202,8 +532,11 @@ final class PostForm extends Component
             return collect();
         }
 
-        return TaxonomyItem::query()
+        $taxonomyItemModel = TaxonomyModels::taxonomyItem();
+
+        return $taxonomyItemModel::query()
             ->whereIn('uuid', $this->form->tagUuids)
+            ->when(config('corexis.tenancy.enabled', false), fn ($query) => $query->where((string) config('corexis.tenancy.id_column', 'team_id'), $this->currentTeamId()))
             ->ordered()
             ->get();
     }
@@ -218,15 +551,168 @@ final class PostForm extends Component
 
     public function featuredImageUrl(): ?string
     {
-        if (! $this->form->featured_image) {
+        if ($this->form->removeFeaturedImage) {
             return null;
         }
 
-        if (str_starts_with($this->form->featured_image, 'http://') || str_starts_with($this->form->featured_image, 'https://')) {
-            return $this->form->featured_image;
+        return $this->post?->exists
+            ? $this->post->featuredImageUrl('large')
+            : null;
+    }
+
+    /** @return array{attached: bool, title: string|null, count: int} */
+    #[Computed]
+    public function gallerySummary(): array
+    {
+        if (! $this->post?->exists) {
+            return ['attached' => false, 'title' => null, 'count' => 0];
         }
 
-        return Storage::disk('public')->url($this->form->featured_image);
+        $gallery = $this->postForCurrentTeam((string) $this->post->uuid)->gallery('images');
+
+        if (! $gallery) {
+            return ['attached' => false, 'title' => null, 'count' => 0];
+        }
+
+        return [
+            'attached' => true,
+            'title' => $gallery->displayTitle(),
+            'count' => $gallery->media()->count(),
+        ];
+    }
+
+    public function archivedContentHtml(): string
+    {
+        if ($this->post?->status !== 'archived') {
+            return '';
+        }
+
+        $content = $this->post->localized('content');
+
+        return app(RichTextSanitizer::class)->sanitize($content);
+    }
+
+    public function publicPostUrl(): ?string
+    {
+        if (! $this->post?->exists) {
+            return null;
+        }
+
+        $teamId = $this->currentTeamId();
+
+        if ($teamId === null) {
+            return null;
+        }
+
+        $organizationModel = BlogConfigResolver::publicOrganizationModel();
+        $pageModel = BlogConfigResolver::publicOrganizationPageModel();
+
+        if ($organizationModel === null || $pageModel === null) {
+            return null;
+        }
+
+        $organizationQuery = $organizationModel::query();
+        $activeScope = (string) config('blog.public_organization.organization_active_scope', '');
+
+        if ($activeScope !== '' && method_exists($organizationModel, 'scope'.Str::studly($activeScope))) {
+            $organizationQuery->{$activeScope}();
+        }
+
+        $organizationSlug = $organizationQuery
+            ->where((string) config('blog.public_organization.organization_team_column', 'team_id'), $teamId)
+            ->value((string) config('blog.public_organization.organization_slug_column', 'slug'));
+
+        if (! $organizationSlug) {
+            return null;
+        }
+
+        $postsPageSlug = $pageModel::query()
+            ->where((string) config('corexis.tenancy.id_column', 'team_id'), $teamId)
+            ->where('is_published', true)
+            ->where('status', 'published')
+            ->whereNotNull('published_at')
+            ->where('published_at', '<=', now())
+            ->where(function ($query): void {
+                $pageKey = (string) config('blog.public_organization.page_key', 'posts');
+                $slugCandidates = (array) config('blog.public_organization.post_page_slugs', ['posts', 'objave']);
+
+                $query->where('page_key', $pageKey)
+                    ->orWhereIn('slug', $slugCandidates);
+            })
+            ->value('slug');
+
+        if (! $postsPageSlug) {
+            return null;
+        }
+
+        $routeName = (string) config('blog.public_organization.content_route_name', 'public.organization.content');
+
+        if (! Route::has($routeName)) {
+            return null;
+        }
+
+        return route($routeName, [
+            'organizationSlug' => (string) $organizationSlug,
+            'pageSlug' => (string) $postsPageSlug,
+            'contentSlug' => (string) ($this->post->slug ?: $this->post->uuid),
+        ]);
+    }
+
+    public function publicPostCanBeViewed(): bool
+    {
+        return (bool) $this->post?->isPublished();
+    }
+
+    /** @return array{heading: string, text: string, icon: string, color: string}|null */
+    public function publicationVisibilityNotice(): ?array
+    {
+        if (! $this->post?->exists) {
+            return null;
+        }
+
+        if ($this->post->status === 'draft') {
+            return [
+                'heading' => __('Objava je skica'),
+                'text' => __('Objava je spremljena kao radna verzija i nije vidljiva posjetiteljima dok je ne označite kao objavljenu i spremite promjene.'),
+                'icon' => 'pencil-square',
+                'color' => 'amber',
+            ];
+        }
+
+        if ($this->post->status === 'archived') {
+            return [
+                'heading' => __('Arhivirana objava je zaključana'),
+                'text' => __('Ne prikazuje se javno i ne može se uređivati ni isticati. Vratite je u skicu samo ako ponovno želite raditi na sadržaju.'),
+                'icon' => 'lock-closed',
+                'color' => 'zinc',
+            ];
+        }
+
+        if ($this->post->status !== 'published') {
+            return null;
+        }
+
+        $publishedAt = $this->post->published_at;
+
+        if (! $publishedAt) {
+            return [
+                'heading' => __('Objava nema datum objave'),
+                'text' => __('Objava je označena kao objavljena, ali bez datuma objave nije javno vidljiva. Spremite promjene kako bi dobila sadašnji datum objave.'),
+                'icon' => 'calendar-days',
+                'color' => 'red',
+            ];
+        }
+
+        if ($publishedAt->isFuture()) {
+            return [
+                'heading' => __('Objava je zakazana'),
+                'text' => __('Objava nije još javno vidljiva. Prikazat će se posjetiteljima :date.', ['date' => $publishedAt->format('d.m.Y. H:i')]),
+                'icon' => 'clock',
+                'color' => 'blue',
+            ];
+        }
+
+        return null;
     }
 
     private function createTaxonomyItem(string $type, string $name, string $taxonomyName, bool $multiple): TaxonomyItem
@@ -236,41 +722,53 @@ final class PostForm extends Component
         if ($name === '') {
             $this->addError($type === 'category' ? 'categorySearch' : 'tagSearch', __('Naziv je obavezan.'));
 
-            return new TaxonomyItem;
+            $taxonomyItemModel = TaxonomyModels::taxonomyItem();
+
+            return new $taxonomyItemModel;
         }
 
         $teamId = $this->currentTeamId();
 
-        $taxonomy = Taxonomy::query()
+        $taxonomyModel = TaxonomyModels::taxonomy();
+        $taxonomyItemModel = TaxonomyModels::taxonomyItem();
+        $taxonomy = $taxonomyModel::query()
             ->where('type', $type)
             ->where('slug', Str::slug($taxonomyName))
-            ->when($teamId, fn ($query) => $query->where('team_id', $teamId))
+            ->when(config('corexis.tenancy.enabled', false), fn ($query) => $query->where((string) config('corexis.tenancy.id_column', 'team_id'), $teamId))
             ->first();
 
         if (! $taxonomy) {
-            $taxonomy = new Taxonomy([
+            $taxonomy = new $taxonomyModel([
                 'type' => $type,
                 'slug' => Str::slug($taxonomyName),
                 'name' => $taxonomyName,
                 'is_filterable' => true,
                 'is_multiple' => $multiple,
             ]);
-            $taxonomy->forceFill(['team_id' => $teamId])->save();
+            if (config('corexis.tenancy.enabled', false)) {
+                $taxonomy->setAttribute((string) config('corexis.tenancy.id_column', 'team_id'), $teamId);
+            }
+
+            $taxonomy->save();
         }
 
-        $item = TaxonomyItem::query()
+        $item = $taxonomyItemModel::query()
             ->where('taxonomy_id', $taxonomy->id)
             ->where('slug', Str::slug($name))
-            ->when($teamId, fn ($query) => $query->where('team_id', $teamId))
+            ->when(config('corexis.tenancy.enabled', false), fn ($query) => $query->where((string) config('corexis.tenancy.id_column', 'team_id'), $teamId))
             ->first();
 
         if (! $item) {
-            $item = new TaxonomyItem([
+            $item = new $taxonomyItemModel([
                 'taxonomy_id' => $taxonomy->id,
                 'slug' => Str::slug($name),
                 'name' => $name,
             ]);
-            $item->forceFill(['team_id' => $teamId])->save();
+            if (config('corexis.tenancy.enabled', false)) {
+                $item->setAttribute((string) config('corexis.tenancy.id_column', 'team_id'), $teamId);
+            }
+
+            $item->save();
         }
 
         return $item;
@@ -283,8 +781,10 @@ final class PostForm extends Component
     {
         $search = trim($search);
 
-        $results = TaxonomyItem::query()
+        $taxonomyItemModel = TaxonomyModels::taxonomyItem();
+        $results = $taxonomyItemModel::query()
             ->forType($type)
+            ->when(config('corexis.tenancy.enabled', false), fn ($query) => $query->where((string) config('corexis.tenancy.id_column', 'team_id'), $this->currentTeamId()))
             ->when($search !== '', fn ($query) => $query->where('name', 'like', "%{$search}%"))
             ->ordered()
             ->limit(20)
@@ -305,8 +805,9 @@ final class PostForm extends Component
             return $results;
         }
 
-        return TaxonomyItem::query()
+        return $taxonomyItemModel::query()
             ->whereIn('uuid', $missingSelectedUuids)
+            ->when(config('corexis.tenancy.enabled', false), fn ($query) => $query->where((string) config('corexis.tenancy.id_column', 'team_id'), $this->currentTeamId()))
             ->ordered()
             ->get()
             ->merge($results);
@@ -383,19 +884,81 @@ final class PostForm extends Component
         }
     }
 
+    private function captureSavedStateSnapshot(): void
+    {
+        $this->savedStateSnapshot = $this->currentStateSnapshot();
+        $this->lastSavedAt = $this->post?->exists
+            ? Carbon::parse($this->post->updated_at ?? now())->timezone(config('app.timezone'))->format('d.m.Y. H:i')
+            : null;
+        $this->lastSavedBy = $this->post?->exists
+            ? (string) (data_get($this->post, 'updatedBy.name') ?: data_get($this->post, 'author.name') ?: '')
+            : null;
+    }
+
+    private function currentStateSnapshot(): array
+    {
+        return $this->normalizeState([
+            'title' => $this->form->title,
+            'content' => $this->form->content,
+            'status' => $this->form->status,
+            'categoryUuids' => $this->form->categoryUuids,
+            'tagUuids' => $this->form->tagUuids,
+            'featuredImageUpload' => $this->form->featuredImageUpload instanceof TemporaryUploadedFile,
+            'removeFeaturedImage' => $this->form->removeFeaturedImage,
+            'published_at' => $this->form->published_at,
+            'is_featured' => $this->form->is_featured,
+        ]);
+    }
+
+    private function normalizeState(array $state): array
+    {
+        foreach ($state as $key => $value) {
+            if (is_array($value)) {
+                $value = array_map(
+                    fn (mixed $item): mixed => is_array($item) ? $this->normalizeState($item) : $this->normalizeScalarState($item),
+                    $value,
+                );
+
+                in_array($key, ['categoryUuids', 'tagUuids'], true)
+                    ? sort($value)
+                    : ksort($value);
+
+                $state[$key] = $value;
+
+                continue;
+            }
+
+            $state[$key] = $this->normalizeScalarState($value);
+        }
+
+        ksort($state);
+
+        return $state;
+    }
+
+    private function normalizeScalarState(mixed $value): mixed
+    {
+        if (is_bool($value) || is_int($value) || $value === null) {
+            return $value;
+        }
+
+        return trim((string) $value);
+    }
+
     private function postForCurrentTeam(string $uuid): Post
     {
-        $model = config('blog.models.post', Post::class);
+        $model = BlogModels::post();
 
         return $model::query()
-            ->forTeam($this->currentTeamId())
             ->where('uuid', $uuid)
             ->firstOrFail();
     }
 
     private function currentTeamId(): ?int
     {
-        return app(TeamResolver::class)->resolve();
+        $tenantId = corexis_tenant_id();
+
+        return is_numeric($tenantId) ? (int) $tenantId : null;
     }
 
     private function currentLocaleCode(): string
@@ -405,6 +968,6 @@ final class PostForm extends Component
 
     private function toastFromResult(ActionResult $result): void
     {
-        Flux::toast(variant: $result->successful ? 'success' : 'danger', text: $result->message);
+        Flux::toast(variant: $result->success ? 'success' : 'danger', text: $result->message);
     }
 }

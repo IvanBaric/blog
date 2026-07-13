@@ -12,10 +12,11 @@ use IvanBaric\Blog\Actions\CreatePostAction;
 use IvanBaric\Blog\Actions\DeletePostAction;
 use IvanBaric\Blog\Actions\PublishPostAction;
 use IvanBaric\Blog\Actions\ToggleFeaturedPostAction;
-use IvanBaric\Blog\Data\ActionResult;
 use IvanBaric\Blog\Models\Post;
-use IvanBaric\Blog\Support\TeamResolver;
+use IvanBaric\Blog\Support\BlogModels;
+use IvanBaric\Corexis\Data\ActionResult;
 use Livewire\Attributes\Computed;
+use Livewire\Attributes\Locked;
 use Livewire\Component;
 use Livewire\WithPagination;
 
@@ -25,29 +26,51 @@ final class PostIndex extends Component
 
     public string $search = '';
 
-    public string $status = '';
-
-    public string $taxonomy = '';
-
     public string $filter = 'all';
 
     public string $newPostTitle = '';
 
+    #[Locked]
     public ?string $archivingPostUuid = null;
 
+    #[Locked]
     public string $archivingPostTitle = '';
 
+    #[Locked]
     public ?string $publishingPostUuid = null;
 
+    #[Locked]
     public string $publishingPostTitle = '';
 
+    #[Locked]
     public bool $publishingPostWillPublish = false;
 
+    #[Locked]
+    public bool $publishingPostIsArchived = false;
+
+    #[Locked]
     public ?string $featuringPostUuid = null;
 
+    #[Locked]
     public string $featuringPostTitle = '';
 
+    #[Locked]
     public bool $featuringPostWillFeature = false;
+
+    #[Locked]
+    public ?string $deletingPostUuid = null;
+
+    #[Locked]
+    public string $deletingPostTitle = '';
+
+    #[Locked]
+    public string $deletingPostStatus = '';
+
+    #[Locked]
+    public ?string $deletingPostGalleryTitle = null;
+
+    #[Locked]
+    public int $deletingPostGalleryPhotoCount = 0;
 
     public function mount(): void
     {
@@ -59,11 +82,6 @@ final class PostIndex extends Component
         $this->resetPage();
     }
 
-    public function updatedStatus(): void
-    {
-        $this->resetPage();
-    }
-
     public function setFilter(string $filter): void
     {
         if (! in_array($filter, ['all', 'published', 'draft', 'featured', 'archived'], true)) {
@@ -71,14 +89,24 @@ final class PostIndex extends Component
         }
 
         $this->filter = $filter;
-        $this->status = in_array($filter, ['published', 'draft', 'archived'], true) ? $filter : '';
         $this->resetPage();
     }
 
     public function resetFilters(): void
     {
-        $this->reset('search', 'status', 'taxonomy', 'filter');
+        $this->reset('search', 'filter');
         $this->resetPage();
+    }
+
+    public function openCreatePost(): void
+    {
+        $this->reset('newPostTitle');
+        Flux::modal('post-create-form')->show();
+    }
+
+    public function cancelCreatePost(): void
+    {
+        $this->reset('newPostTitle');
     }
 
     public function createPost(CreatePostAction $createPost): void
@@ -99,9 +127,9 @@ final class PostIndex extends Component
             'is_featured' => false,
         ]);
 
-        if (! $result->successful) {
-            if (is_object($result->data) && method_exists($result->data, 'messages')) {
-                foreach ($result->data->messages() as $field => $messages) {
+        if (! $result->success) {
+            if ($result->errors !== []) {
+                foreach ($result->errors as $field => $messages) {
                     $this->addError($field, $messages[0] ?? $result->message);
                 }
             }
@@ -139,15 +167,17 @@ final class PostIndex extends Component
     {
         $post = $this->findPost($uuid);
 
-        if ($post->status === 'archived') {
-            return;
-        }
-
         $this->publishingPostUuid = (string) $post->uuid;
         $this->publishingPostTitle = $post->localized('title') ?: __('Neimenovana objava');
-        $this->publishingPostWillPublish = ! $post->isPublished();
+        $this->publishingPostIsArchived = $post->status === 'archived';
+        $this->publishingPostWillPublish = ! $this->publishingPostIsArchived && ! $post->isPublished();
 
         Flux::modal('post-publish-confirm')->show();
+    }
+
+    public function cancelPublish(): void
+    {
+        $this->reset('publishingPostUuid', 'publishingPostTitle', 'publishingPostWillPublish', 'publishingPostIsArchived');
     }
 
     public function confirmPublishChange(PublishPostAction $publishPost): void
@@ -156,12 +186,22 @@ final class PostIndex extends Component
             return;
         }
 
+        $post = $this->findPost($this->publishingPostUuid);
+
+        if ($this->publishingPostIsArchived && $post->status !== 'archived') {
+            $this->reset('publishingPostUuid', 'publishingPostTitle', 'publishingPostWillPublish', 'publishingPostIsArchived');
+            Flux::modal('post-publish-confirm')->close();
+            Flux::toast(variant: 'danger', text: __('Status objave promijenjen je u međuvremenu. Osvježite popis i pokušajte ponovno.'));
+
+            return;
+        }
+
         $result = $publishPost->handle(
-            $this->findPost($this->publishingPostUuid),
+            $post,
             $this->publishingPostWillPublish,
         );
 
-        $this->reset('publishingPostUuid', 'publishingPostTitle', 'publishingPostWillPublish');
+        $this->reset('publishingPostUuid', 'publishingPostTitle', 'publishingPostWillPublish', 'publishingPostIsArchived');
         unset($this->posts, $this->stats);
 
         Flux::modal('post-publish-confirm')->close();
@@ -179,7 +219,7 @@ final class PostIndex extends Component
     {
         $post = $this->findPost($uuid);
 
-        if ($post->status === 'archived') {
+        if ($post->status !== 'published') {
             return;
         }
 
@@ -188,6 +228,11 @@ final class PostIndex extends Component
         $this->featuringPostWillFeature = ! (bool) $post->is_featured;
 
         Flux::modal('post-featured-confirm')->show();
+    }
+
+    public function cancelFeatured(): void
+    {
+        $this->reset('featuringPostUuid', 'featuringPostTitle', 'featuringPostWillFeature');
     }
 
     public function confirmFeaturedChange(ToggleFeaturedPostAction $toggleFeaturedPost): void
@@ -219,6 +264,11 @@ final class PostIndex extends Component
         Flux::modal('post-archive-confirm')->show();
     }
 
+    public function cancelArchive(): void
+    {
+        $this->reset('archivingPostUuid', 'archivingPostTitle');
+    }
+
     public function archive(ArchivePostAction $archivePost): void
     {
         if (! $this->archivingPostUuid) {
@@ -234,9 +284,59 @@ final class PostIndex extends Component
         $this->toastFromResult($result);
     }
 
-    public function delete(string $uuid, DeletePostAction $deletePost): void
+    public function confirmDelete(string $uuid): void
     {
-        $result = $deletePost->handle($this->findPost($uuid));
+        $post = $this->findPost($uuid);
+
+        if (! in_array($post->status, ['draft', 'archived'], true)) {
+            Flux::toast(variant: 'danger', text: __('Objavljenu objavu prvo arhivirajte prije brisanja.'));
+
+            return;
+        }
+
+        $this->deletingPostUuid = (string) $post->uuid;
+        $this->deletingPostTitle = $post->localized('title') ?: __('Neimenovana objava');
+        $this->deletingPostStatus = $post->status;
+        $gallery = $post->gallery('images');
+        $this->deletingPostGalleryTitle = $gallery?->displayTitle();
+        $this->deletingPostGalleryPhotoCount = $gallery?->media()->count() ?? 0;
+
+        Flux::modal('post-delete-confirm')->show();
+    }
+
+    public function cancelDelete(): void
+    {
+        $this->reset(
+            'deletingPostUuid',
+            'deletingPostTitle',
+            'deletingPostStatus',
+            'deletingPostGalleryTitle',
+            'deletingPostGalleryPhotoCount',
+        );
+    }
+
+    public function delete(DeletePostAction $deletePost): void
+    {
+        if (! $this->deletingPostUuid) {
+            return;
+        }
+
+        $post = $this->findPost($this->deletingPostUuid);
+
+        if ($post->status !== $this->deletingPostStatus) {
+            $this->cancelDelete();
+            Flux::modal('post-delete-confirm')->close();
+            Flux::toast(variant: 'danger', text: __('Status objave promijenjen je u međuvremenu. Osvježite popis i pokušajte ponovno.'));
+
+            return;
+        }
+
+        $result = $deletePost->handle($post);
+
+        $this->cancelDelete();
+        unset($this->posts, $this->stats);
+
+        Flux::modal('post-delete-confirm')->close();
 
         $this->toastFromResult($result);
     }
@@ -244,44 +344,52 @@ final class PostIndex extends Component
     #[Computed]
     public function posts(): Paginator
     {
-        $model = config('blog.models.post', Post::class);
+        $model = BlogModels::post();
+        $search = str($this->search)->trim()->limit(160, '')->toString();
+        $filter = in_array($this->filter, ['all', 'published', 'draft', 'featured', 'archived'], true) ? $this->filter : 'all';
 
         return $model::query()
-            ->forTeam($this->currentTeamId())
-            ->with('taxonomyItems.taxonomy')
-            ->when($this->search !== '', function (Builder $query): void {
-                $query->where(function (Builder $query): void {
-                    $query->where('title', 'like', "%{$this->search}%");
+            ->with([
+                'taxonomyItems.taxonomy',
+                'galleries' => fn ($query) => $query
+                    ->forCollection('images')
+                    ->withCount('media'),
+            ])
+            ->when($search !== '', function (Builder $query) use ($search): void {
+                $query->where(function (Builder $query) use ($search): void {
+                    $query->where('title', 'like', "%{$search}%");
                 });
             })
-            ->when($this->status !== '', fn (Builder $query) => $query->where('status', $this->status))
-            ->when($this->filter === 'featured', fn (Builder $query) => $query->where('is_featured', true))
+            ->when(in_array($filter, ['published', 'draft', 'archived'], true), fn (Builder $query) => $query->where('status', $filter))
+            ->when($filter === 'featured', fn (Builder $query) => $query->featured())
             ->ordered()
-            ->simplePaginate(6);
+            ->simplePaginate(max(1, (int) config('corexis.pagination.default_items', 12)));
     }
 
     #[Computed]
     public function stats(): array
     {
-        $model = config('blog.models.post', Post::class);
+        $model = BlogModels::post();
 
         return [
-            'total' => $model::query()->forTeam($this->currentTeamId())->count(),
-            'published' => $model::query()->forTeam($this->currentTeamId())->where('status', 'published')->count(),
-            'draft' => $model::query()->forTeam($this->currentTeamId())->where('status', 'draft')->count(),
-            'archived' => $model::query()->forTeam($this->currentTeamId())->where('status', 'archived')->count(),
-            'featured' => $model::query()->forTeam($this->currentTeamId())->where('is_featured', true)->count(),
+            'total' => $model::query()->count(),
+            'published' => $model::query()->where('status', 'published')->count(),
+            'draft' => $model::query()->where('status', 'draft')->count(),
+            'archived' => $model::query()->where('status', 'archived')->count(),
+            'featured' => $model::query()->featured()->count(),
         ];
     }
 
     #[Computed]
     public function statCards(): array
     {
+        $stats = $this->stats();
+
         return [
-            ['label' => __('Ukupno objava'), 'value' => $this->stats['total'], 'icon' => 'document-text', 'accent' => 'bg-zinc-900 dark:bg-white'],
-            ['label' => __('Objavljeno'), 'value' => $this->stats['published'], 'icon' => 'check-circle', 'accent' => 'bg-emerald-500'],
-            ['label' => __('Skice'), 'value' => $this->stats['draft'], 'icon' => 'pencil-square', 'accent' => 'bg-sky-500'],
-            ['label' => __('Izdvojeno'), 'value' => $this->stats['featured'], 'icon' => 'sparkles', 'accent' => 'bg-amber-400'],
+            ['label' => __('Ukupno objava'), 'value' => $stats['total'], 'icon' => 'document-text', 'accent' => 'bg-zinc-900 dark:bg-white'],
+            ['label' => __('Objavljeno'), 'value' => $stats['published'], 'icon' => 'check-circle', 'accent' => 'bg-emerald-500'],
+            ['label' => __('Skice'), 'value' => $stats['draft'], 'icon' => 'pencil-square', 'accent' => 'bg-sky-500'],
+            ['label' => __('Izdvojeno'), 'value' => $stats['featured'], 'icon' => 'sparkles', 'accent' => 'bg-amber-400'],
         ];
     }
 
@@ -313,7 +421,7 @@ final class PostIndex extends Component
 
     public function isFiltered(): bool
     {
-        return $this->search !== '' || $this->filter !== 'all' || $this->status !== '' || $this->taxonomy !== '';
+        return $this->search !== '' || $this->filter !== 'all';
     }
 
     public function statusBadge(Post $post): array
@@ -334,7 +442,7 @@ final class PostIndex extends Component
         $category = $post->taxonomyItems
             ->first(fn ($item): bool => (string) data_get($item, 'taxonomy.type') === 'category');
 
-        return $category?->name ?: __('Bez kategorije');
+        return data_get($category, 'name') ?: __('Bez kategorije');
     }
 
     public function publishedAt(Post $post): string
@@ -356,17 +464,18 @@ final class PostIndex extends Component
 
     private function findPost(string $uuid): Post
     {
-        $model = config('blog.models.post', Post::class);
+        $model = BlogModels::post();
 
         return $model::query()
-            ->forTeam($this->currentTeamId())
             ->where('uuid', $uuid)
             ->firstOrFail();
     }
 
     private function currentTeamId(): ?int
     {
-        return app(TeamResolver::class)->resolve();
+        $tenantId = corexis_tenant_id();
+
+        return is_numeric($tenantId) ? (int) $tenantId : null;
     }
 
     private function currentLocaleCode(): string
@@ -376,6 +485,6 @@ final class PostIndex extends Component
 
     private function toastFromResult(ActionResult $result): void
     {
-        Flux::toast(variant: $result->successful ? 'success' : 'danger', text: $result->message);
+        Flux::toast(variant: $result->success ? 'success' : 'danger', text: $result->message);
     }
 }

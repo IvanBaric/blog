@@ -6,9 +6,9 @@ namespace IvanBaric\Blog\Actions;
 
 use Illuminate\Support\Facades\DB;
 use IvanBaric\Blog\Actions\Concerns\AuthorizesBlogActions;
-use IvanBaric\Blog\Data\ActionResult;
 use IvanBaric\Blog\Events\PostDeleted;
 use IvanBaric\Blog\Models\Post;
+use IvanBaric\Corexis\Data\ActionResult;
 
 final class DeletePostAction
 {
@@ -20,14 +20,36 @@ final class DeletePostAction
             return $result;
         }
 
-        $postKey = $post->getKey();
-        $uuid = (string) $post->uuid;
+        $deletedPost = DB::transaction(function () use ($post): ?array {
+            /** @var Post $currentPost */
+            $currentPost = $post->newQuery()
+                ->whereKey($post->getKey())
+                ->lockForUpdate()
+                ->firstOrFail();
 
-        DB::transaction(static function () use ($post): void {
-            $post->delete();
+            if (! in_array($currentPost->status, ['draft', 'archived'], true)) {
+                return null;
+            }
+
+            $deletedPost = [
+                'key' => $currentPost->getKey(),
+                'uuid' => (string) $currentPost->uuid,
+            ];
+
+            $currentPost->delete();
+
+            return $deletedPost;
         });
 
-        PostDeleted::dispatch($postKey, $uuid);
+        if ($deletedPost === null) {
+            return ActionResult::error(
+                __('Objavljenu objavu prvo arhivirajte prije brisanja.'),
+                code: 'blog_published_post_cannot_be_deleted',
+                errors: ['status' => [__('Objavljenu objavu prvo arhivirajte prije brisanja.')]],
+            );
+        }
+
+        PostDeleted::dispatch($deletedPost['key'], $deletedPost['uuid']);
 
         return ActionResult::success(__('Objava je obrisana.'));
     }
