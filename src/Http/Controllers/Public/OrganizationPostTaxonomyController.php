@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
+use IvanBaric\Blog\Models\Post;
 use IvanBaric\Blog\Support\BlogConfigResolver;
 use IvanBaric\Blog\Support\BlogModels;
 use IvanBaric\Taxonomy\Support\TaxonomyModels;
@@ -36,6 +37,21 @@ final class OrganizationPostTaxonomyController
             && Schema::hasColumn('taxonomyables', $taxonomyTenantColumn);
 
         $posts = $postModel::query()
+            ->select([
+                $postTable.'.id',
+                $postTable.'.team_id',
+                $postTable.'.uuid',
+                $postTable.'.slug',
+                $postTable.'.title',
+                $postTable.'.excerpt',
+                $postTable.'.status',
+                $postTable.'.published_at',
+            ])
+            ->with([
+                'galleries' => fn ($query) => $query
+                    ->forCollection(Post::FEATURED_IMAGE_COLLECTION)
+                    ->with('media'),
+            ])
             ->forTenant($teamId)
             ->published()
             ->whereExists(function ($query) use ($taxonomyItem, $teamId, $postTable, $postMorphClass, $scopePivotTenant, $taxonomyTenantColumn): void {

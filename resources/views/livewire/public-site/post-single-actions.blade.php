@@ -4,6 +4,8 @@
 @endphp
 
 <div class="contents">
+    <x-admin-ui::action-loading target="cycleSinglePostLayout" :text="__('Učitavanje...')" />
+
     @if ($hasActions)
         <div class="flex shrink-0 items-center gap-2" data-public-post-single-actions>
             @if ($editUrl)

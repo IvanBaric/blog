@@ -19,9 +19,11 @@
         </x-slot:meta>
 
         <x-slot:actions>
-            <flux:button :href="route(config('blog.routes.admin_name_prefix', 'admin.blog.').'index')" wire:navigate variant="ghost" icon="arrow-left">
-                {{ __('Sve objave') }}
-            </flux:button>
+            @unless ($embedded)
+                <flux:button :href="route(config('blog.routes.admin_name_prefix', 'admin.blog.').'index')" wire:navigate variant="ghost" icon="arrow-left">
+                    {{ __('Sve objave') }}
+                </flux:button>
+            @endunless
             <flux:button
                 type="button"
                 wire:click="confirmDelete"
@@ -206,28 +208,29 @@
                 @endif
             </x-slot:meta>
 
-            <x-slot:actions>
-                <flux:button :href="route(config('blog.routes.admin_name_prefix', 'admin.blog.').'index')" wire:navigate variant="ghost" icon="arrow-left">
-                    {{ __('Sve objave') }}
-                </flux:button>
-                @if ($publicPostUrl = $this->publicPostUrl())
-                    @if ($this->publicPostCanBeViewed())
-                        <flux:button :href="$publicPostUrl" target="_blank" variant="filled" icon-trailing="arrow-up-right">
-                            {{ __('Pogledaj objavu') }}
-                        </flux:button>
-
-                    @else
-                        <flux:tooltip :content="__('Objava je skica i ne može se javno vidjeti dok nije objavljena.')" position="bottom">
-                            <flux:button type="button" variant="filled" icon="exclamation-triangle" disabled>
+            @unless ($embedded)
+                <x-slot:actions>
+                    <flux:button :href="route(config('blog.routes.admin_name_prefix', 'admin.blog.').'index')" wire:navigate variant="ghost" icon="arrow-left">
+                        {{ __('Sve objave') }}
+                    </flux:button>
+                    @if ($publicPostUrl = $this->publicPostUrl())
+                        @if ($this->publicPostCanBeViewed())
+                            <flux:button :href="$publicPostUrl" target="_blank" rel="noopener noreferrer" variant="filled" icon-trailing="arrow-up-right">
                                 {{ __('Pogledaj objavu') }}
                             </flux:button>
-                        </flux:tooltip>
+                        @else
+                            <flux:tooltip :content="__('Objava je skica i ne može se javno vidjeti dok nije objavljena.')" position="bottom">
+                                <flux:button type="button" variant="filled" icon="exclamation-triangle" disabled>
+                                    {{ __('Pogledaj objavu') }}
+                                </flux:button>
+                            </flux:tooltip>
+                        @endif
                     @endif
-                @endif
-                <x-admin-ui::submit-button target="save">
-                    {{ __('Spremi objavu') }}
-                </x-admin-ui::submit-button>
-            </x-slot:actions>
+                    <x-admin-ui::submit-button target="save">
+                        {{ __('Spremi objavu') }}
+                    </x-admin-ui::submit-button>
+                </x-slot:actions>
+            @endunless
         </x-admin-ui::editor-header>
 
         <div class="grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1fr)_24rem]">
@@ -239,12 +242,18 @@
                     </div>
                 </section>
 
-            <div class="grid min-w-0 gap-6 lg:grid-cols-2">
+            <div class="grid min-w-0 grid-cols-1 gap-6" data-post-taxonomy-fields>
                 <section class="admin-panel p-4 sm:p-6">
                     <div class="space-y-5">
-                        <div>
-                            <h2 class="admin-panel-title">{{ __('Kategorije') }}</h2>
-                            <p class="admin-panel-description mt-1">{{ __('Odaberite jednu ili više kategorija ili dodajte novu izravno iz pretrage.') }}</p>
+                        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                                <h2 class="admin-panel-title">{{ __('Kategorije') }}</h2>
+                                <p class="admin-panel-description mt-1">{{ __('Odaberite jednu ili više kategorija ili dodajte novu izravno iz pretrage.') }}</p>
+                            </div>
+
+                            <flux:button type="button" wire:click="openTaxonomyManager('category')" wire:loading.attr="disabled" wire:target="openTaxonomyManager" variant="filled" size="sm" icon="folder" class="w-full justify-center sm:w-auto">
+                                {{ __('Uredi kategorije') }}
+                            </flux:button>
                         </div>
 
                         <flux:pillbox wire:model.live="form.categoryUuids" variant="combobox" multiple :placeholder="__('Odaberi kategorije...')">
@@ -265,9 +274,15 @@
 
                 <section class="admin-panel p-4 sm:p-6">
                     <div class="space-y-5">
-                        <div>
-                            <h2 class="admin-panel-title">{{ __('Oznake') }}</h2>
-                            <p class="admin-panel-description mt-1">{{ __('Dodajte jednu ili više oznaka za tematsko povezivanje objava.') }}</p>
+                        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                                <h2 class="admin-panel-title">{{ __('Oznake') }}</h2>
+                                <p class="admin-panel-description mt-1">{{ __('Dodajte jednu ili više oznaka za tematsko povezivanje objava.') }}</p>
+                            </div>
+
+                            <flux:button type="button" wire:click="openTaxonomyManager('tags')" wire:loading.attr="disabled" wire:target="openTaxonomyManager" variant="filled" size="sm" icon="tag" class="w-full justify-center sm:w-auto">
+                                {{ __('Uredi oznake') }}
+                            </flux:button>
                         </div>
 
                         <flux:pillbox wire:model.live="form.tagUuids" variant="combobox" multiple :placeholder="__('Odaberi oznake...')">
@@ -453,5 +468,26 @@
             </div>
         </flux:modal>
     @endif
+
+    <flux:modal name="post-taxonomy-manager" x-on:close="$wire.closeTaxonomyManager()" class="w-[calc(100vw-2rem)] max-w-5xl sm:w-[64rem]">
+        <div class="space-y-6">
+            <div>
+                <flux:heading size="lg">
+                    {{ $taxonomyManagerType === 'category' ? __('Kategorije') : __('Oznake') }}
+                </flux:heading>
+                <flux:text class="mt-2">
+                    {{ $taxonomyManagerType === 'category' ? __('Uredite kategorije koje se koriste u objavama.') : __('Uredite oznake koje se koriste u objavama.') }}
+                </flux:text>
+            </div>
+
+            @if ($taxonomyManagerType)
+                @livewire(
+                    \IvanBaric\Blog\Livewire\Admin\PostTaxonomies::class,
+                    ['type' => $taxonomyManagerType, 'embedded' => true],
+                    key('post-form-taxonomy-manager-'.$taxonomyManagerType)
+                )
+            @endif
+        </div>
+    </flux:modal>
 @endif
 </section>

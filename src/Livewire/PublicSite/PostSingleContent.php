@@ -17,8 +17,19 @@ use Livewire\Component;
 
 final class PostSingleContent extends Component
 {
+    private ?Post $resolvedPost = null;
+
+    private bool $postWasResolved = false;
+
+    private ?Model $resolvedSection = null;
+
+    private bool $sectionWasResolved = false;
+
     #[Locked]
     public string $postUuid = '';
+
+    #[Locked]
+    public ?int $teamId = null;
 
     #[Locked]
     public ?string $sectionUuid = null;
@@ -71,7 +82,12 @@ final class PostSingleContent extends Component
         mixed $categories = [],
         mixed $tags = [],
     ): void {
+        $this->resolvedPost = $post->isPublished() ? $post : null;
+        $this->postWasResolved = true;
+        $this->resolvedSection = $section;
+        $this->sectionWasResolved = true;
         $this->postUuid = (string) $post->getAttribute('uuid');
+        $this->teamId = is_numeric($post->getAttribute('team_id')) ? (int) $post->getAttribute('team_id') : null;
         $this->sectionUuid = $section ? (string) $section->getAttribute('uuid') : null;
         $this->organizationSlug = $organizationSlug;
         $this->pageSlug = $pageSlug;
@@ -94,6 +110,7 @@ final class PostSingleContent extends Component
     public function render(): View
     {
         $post = $this->post();
+        $section = $this->section();
 
         abort_if($post === null, 404);
         abort_unless(PublishablePostContent::isPresent($post->content), 404);
@@ -146,8 +163,8 @@ final class PostSingleContent extends Component
 
         return view('blog::livewire.public-site.post-single-content', [
             'post' => $post,
-            'section' => $this->section(),
-            'singleLayout' => $this->singleLayout(),
+            'section' => $section,
+            'singleLayout' => $this->singleLayout($section),
             'title' => $title,
             'excerpt' => $excerpt,
             'content' => $content,
@@ -206,9 +223,9 @@ final class PostSingleContent extends Component
         }
     }
 
-    private function singleLayout(): string
+    private function singleLayout(?Model $section): string
     {
-        $layout = (string) data_get($this->section()?->getAttribute('settings'), 'single_layout', 'classic');
+        $layout = (string) data_get($section?->getAttribute('settings'), 'single_layout', 'classic');
 
         return in_array($layout, ['classic', 'hero', 'compact', 'cover', 'sidebar'], true) ? $layout : 'classic';
     }
@@ -241,13 +258,21 @@ final class PostSingleContent extends Component
 
     private function post(): ?Post
     {
-        if ($this->postUuid === '') {
+        if ($this->postWasResolved) {
+            return $this->resolvedPost;
+        }
+
+        $this->postWasResolved = true;
+
+        if ($this->postUuid === '' || $this->teamId === null) {
             return null;
         }
 
         $model = BlogModels::post();
 
-        return $model::query()
+        return $this->resolvedPost = $model::query()
+            ->forTenant($this->teamId)
+            ->with(['author', 'galleries.media'])
             ->published()
             ->where('uuid', $this->postUuid)
             ->first();
@@ -255,7 +280,13 @@ final class PostSingleContent extends Component
 
     private function section(): ?Model
     {
-        if (! $this->sectionUuid) {
+        if ($this->sectionWasResolved) {
+            return $this->resolvedSection;
+        }
+
+        $this->sectionWasResolved = true;
+
+        if (! $this->sectionUuid || $this->teamId === null) {
             return null;
         }
 
@@ -265,6 +296,9 @@ final class PostSingleContent extends Component
             return null;
         }
 
-        return $sectionModel::query()->where('uuid', $this->sectionUuid)->first();
+        return $this->resolvedSection = $sectionModel::query()
+            ->forTenant($this->teamId)
+            ->where('uuid', $this->sectionUuid)
+            ->first();
     }
 }

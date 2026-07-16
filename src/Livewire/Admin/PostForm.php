@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace IvanBaric\Blog\Livewire\Admin;
 
 use Flux\Flux;
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Route;
@@ -53,7 +52,7 @@ final class PostForm extends Component
     public ?string $publishedTime = null;
 
     #[Locked]
-    public array $savedStateSnapshot = [];
+    public string $savedStateHash = '';
 
     #[Locked]
     public ?string $lastSavedAt = null;
@@ -70,11 +69,18 @@ final class PostForm extends Component
     #[Locked]
     public ?string $archivingPostUuid = null;
 
-    public function mount(?Post $post = null): void
+    #[Locked]
+    public bool $embedded = false;
+
+    #[Locked]
+    public ?string $taxonomyManagerType = null;
+
+    public function mount(?Post $post = null, bool $embedded = false): void
     {
         corexis_authorize($post?->exists ? 'blog.update' : 'blog.create', $post?->exists ? $post : []);
 
         $this->locale = $this->currentLocaleCode();
+        $this->embedded = $embedded;
         $this->form->initialize($this->locale);
 
         if ($post?->exists) {
@@ -84,7 +90,7 @@ final class PostForm extends Component
         }
 
         $this->syncPublishedFieldsFromForm();
-        $this->captureSavedStateSnapshot();
+        $this->captureSavedStateHash();
     }
 
     public function save(SavePostAction $savePostAction): void
@@ -107,7 +113,23 @@ final class PostForm extends Component
             return;
         }
 
-        $this->persistPost($savePostAction, redirectAfterCreate: true);
+        if ($this->persistPost($savePostAction, redirectAfterCreate: ! $this->embedded) && $this->embedded) {
+            $this->dispatch('blog-source-post-saved');
+        }
+    }
+
+    #[On('pages-save-section-editor')]
+    public function saveFromSectionEditor(SavePostAction $savePostAction): void
+    {
+        if (! $this->embedded) {
+            return;
+        }
+
+        try {
+            $this->save($savePostAction);
+        } finally {
+            $this->dispatch('pages-save-finished');
+        }
     }
 
     public function confirmArchive(): void
@@ -209,7 +231,7 @@ final class PostForm extends Component
 
         $this->syncFormPublishedAt();
 
-        return $this->currentStateSnapshot() !== $this->savedStateSnapshot;
+        return $this->currentStateHash() !== $this->savedStateHash;
     }
 
     public function confirmRestore(): void
@@ -391,7 +413,7 @@ final class PostForm extends Component
         $this->post = $result->data;
         $this->form->fillFromPost($this->post, $this->locale);
         $this->syncPublishedFieldsFromForm();
-        $this->captureSavedStateSnapshot();
+        $this->captureSavedStateHash();
 
         if ($showSuccessToast) {
             $successToastMessage === null
@@ -484,6 +506,28 @@ final class PostForm extends Component
     public function updatedFormTagUuids(mixed $value = null): void
     {
         $this->tagSearch = '';
+    }
+
+    public function openTaxonomyManager(string $type): void
+    {
+        abort_unless(in_array($type, ['category', 'tags'], true), 404);
+
+        corexis_authorize($this->post?->exists ? 'blog.update' : 'blog.create', $this->post?->exists ? $this->post : []);
+
+        $this->taxonomyManagerType = $type;
+
+        Flux::modal('post-taxonomy-manager')->show();
+    }
+
+    public function closeTaxonomyManager(): void
+    {
+        $this->taxonomyManagerType = null;
+    }
+
+    #[On('changed')]
+    public function taxonomyChanged(): void
+    {
+        unset($this->categories, $this->tags, $this->selectedTags);
     }
 
     public function updatedSchedulePublication(bool $value): void
@@ -884,9 +928,9 @@ final class PostForm extends Component
         }
     }
 
-    private function captureSavedStateSnapshot(): void
+    private function captureSavedStateHash(): void
     {
-        $this->savedStateSnapshot = $this->currentStateSnapshot();
+        $this->savedStateHash = $this->currentStateHash();
         $this->lastSavedAt = $this->post?->exists
             ? Carbon::parse($this->post->updated_at ?? now())->timezone(config('app.timezone'))->format('d.m.Y. H:i')
             : null;
@@ -908,6 +952,11 @@ final class PostForm extends Component
             'published_at' => $this->form->published_at,
             'is_featured' => $this->form->is_featured,
         ]);
+    }
+
+    private function currentStateHash(): string
+    {
+        return hash('sha256', serialize($this->currentStateSnapshot()));
     }
 
     private function normalizeState(array $state): array

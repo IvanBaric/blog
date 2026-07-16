@@ -58,7 +58,10 @@ it('boots the package', function (): void {
 
 it('creates the posts table', function (): void {
     expect(Schema::hasTable('blog_posts'))->toBeTrue()
-        ->and(Schema::hasColumn('blog_posts', 'featured_image'))->toBeFalse();
+        ->and(Schema::hasColumn('blog_posts', 'featured_image'))->toBeFalse()
+        ->and(Schema::hasIndex('blog_posts', 'blog_posts_tenant_status_published_idx'))->toBeTrue()
+        ->and(Schema::hasIndex('blog_posts', 'blog_posts_tenant_status_featured_idx'))->toBeTrue()
+        ->and(Schema::hasIndex('blog_posts', 'blog_posts_tenant_order_idx'))->toBeTrue();
 });
 
 it('creates a post', function (): void {

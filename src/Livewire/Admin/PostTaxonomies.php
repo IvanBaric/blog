@@ -33,6 +33,9 @@ final class PostTaxonomies extends Component
     #[Locked]
     public string $type = 'category';
 
+    #[Locked]
+    public bool $embedded = false;
+
     public TaxonomyItemForm $createForm;
 
     public TaxonomyItemForm $editForm;
@@ -49,13 +52,14 @@ final class PostTaxonomies extends Component
     #[Locked]
     public ?string $deletingItemUuid = null;
 
-    public function mount(string $type): void
+    public function mount(string $type, bool $embedded = false): void
     {
         abort_unless(in_array($type, ['category', 'tags'], true), 404);
 
         corexis_authorize('blog.view', $this->currentTeamId());
 
         $this->type = $type;
+        $this->embedded = $embedded;
     }
 
     public function save(CreateTaxonomyItemAction $createTaxonomyItem): void
@@ -86,12 +90,18 @@ final class PostTaxonomies extends Component
         unset($this->items, $this->totalItems);
         $this->dispatch('changed');
 
-        Flux::modal('taxonomy-create')->close();
+        if (! $this->embedded) {
+            Flux::modal('taxonomy-create')->close();
+        }
     }
 
     public function openCreate(): void
     {
         $this->createForm->resetForm();
+
+        if ($this->embedded) {
+            return;
+        }
 
         Flux::modal('taxonomy-create')->show();
     }
@@ -111,6 +121,10 @@ final class PostTaxonomies extends Component
         $this->editForm->resetForm();
         $this->editingItemUuid = (string) $item->getAttribute('uuid');
         $this->editForm->fillFromModel($item);
+
+        if ($this->embedded) {
+            return;
+        }
 
         Flux::modal('taxonomy-edit')->show();
     }
@@ -150,7 +164,9 @@ final class PostTaxonomies extends Component
         unset($this->items);
         $this->dispatch('changed');
 
-        Flux::modal('taxonomy-edit')->close();
+        if (! $this->embedded) {
+            Flux::modal('taxonomy-edit')->close();
+        }
     }
 
     public function confirmDelete(string $uuid): void
@@ -322,10 +338,6 @@ final class PostTaxonomies extends Component
         }
 
         $identity = ['type' => $this->type, 'slug' => $this->type === 'category' ? 'kategorije' : 'oznake'];
-
-        if (config('corexis.tenancy.enabled', false)) {
-            $identity[(string) config('corexis.tenancy.id_column', 'team_id')] = $this->currentTeamId();
-        }
 
         $taxonomyModel = TaxonomyModels::taxonomy();
 

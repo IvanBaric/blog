@@ -46,15 +46,20 @@
                         </div>
                     </article>
                 @empty
-                    <div class="rounded-lg bg-zinc-50 p-6 text-sm text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400">
-                        {{ __('Nema objava za prikaz.') }}
-                    </div>
+                    <x-corexis::public-empty-state
+                        :title="__('Objave uskoro')"
+                        :description="__('U ovoj skupini trenutačno nema objava za prikaz.')"
+                        icon="document-text"
+                        class="md:col-span-2 lg:col-span-3"
+                    />
                 @endforelse
             </div>
 
-            <div class="mt-10">
-                {{ $posts->links() }}
-            </div>
+            @if ($posts->hasPages())
+                <div class="mt-10">
+                    {{ $posts->links() }}
+                </div>
+            @endif
         </div>
     </main>
 </x-layouts.public>

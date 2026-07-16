@@ -345,15 +345,31 @@ final class PostIndex extends Component
     public function posts(): Paginator
     {
         $model = BlogModels::post();
+        $postTable = (new $model)->getTable();
         $search = str($this->search)->trim()->limit(160, '')->toString();
         $filter = in_array($this->filter, ['all', 'published', 'draft', 'featured', 'archived'], true) ? $this->filter : 'all';
 
         return $model::query()
+            ->select([
+                $postTable.'.id',
+                $postTable.'.team_id',
+                $postTable.'.uuid',
+                $postTable.'.slug',
+                $postTable.'.title',
+                $postTable.'.status',
+                $postTable.'.published_at',
+                $postTable.'.is_featured',
+            ])
             ->with([
-                'taxonomyItems.taxonomy',
+                'taxonomyItems' => fn ($query) => $query
+                    ->whereHas('taxonomy', fn ($query) => $query->whereIn('type', ['category', 'post_category']))
+                    ->with('taxonomy'),
                 'galleries' => fn ($query) => $query
-                    ->forCollection('images')
-                    ->withCount('media'),
+                    ->whereIn('collection_name', ['images', Post::FEATURED_IMAGE_COLLECTION])
+                    ->withCount('media')
+                    ->with([
+                        'media' => fn ($query) => $query->where('collection_name', Post::FEATURED_IMAGE_COLLECTION),
+                    ]),
             ])
             ->when($search !== '', function (Builder $query) use ($search): void {
                 $query->where(function (Builder $query) use ($search): void {
@@ -370,20 +386,30 @@ final class PostIndex extends Component
     public function stats(): array
     {
         $model = BlogModels::post();
+        $stats = $model::query()
+            ->selectRaw('COUNT(*) as aggregate_total')
+            ->selectRaw("SUM(CASE WHEN status = 'published' THEN 1 ELSE 0 END) as aggregate_published")
+            ->selectRaw("SUM(CASE WHEN status = 'draft' THEN 1 ELSE 0 END) as aggregate_draft")
+            ->selectRaw("SUM(CASE WHEN status = 'archived' THEN 1 ELSE 0 END) as aggregate_archived")
+            ->selectRaw(
+                "SUM(CASE WHEN status = 'published' AND is_featured = ? THEN 1 ELSE 0 END) as aggregate_featured",
+                [true],
+            )
+            ->first();
 
         return [
-            'total' => $model::query()->count(),
-            'published' => $model::query()->where('status', 'published')->count(),
-            'draft' => $model::query()->where('status', 'draft')->count(),
-            'archived' => $model::query()->where('status', 'archived')->count(),
-            'featured' => $model::query()->featured()->count(),
+            'total' => (int) $stats?->getAttribute('aggregate_total'),
+            'published' => (int) $stats?->getAttribute('aggregate_published'),
+            'draft' => (int) $stats?->getAttribute('aggregate_draft'),
+            'archived' => (int) $stats?->getAttribute('aggregate_archived'),
+            'featured' => (int) $stats?->getAttribute('aggregate_featured'),
         ];
     }
 
     #[Computed]
     public function statCards(): array
     {
-        $stats = $this->stats();
+        $stats = $this->stats;
 
         return [
             ['label' => __('Ukupno objava'), 'value' => $stats['total'], 'icon' => 'document-text', 'accent' => 'bg-zinc-900 dark:bg-white'],
@@ -396,7 +422,7 @@ final class PostIndex extends Component
     #[Computed]
     public function filterOptions(): array
     {
-        $stats = $this->stats();
+        $stats = $this->stats;
 
         return [
             'all' => ['label' => __('Sve'), 'icon' => 'document-text', 'count' => $stats['total']],
@@ -440,7 +466,7 @@ final class PostIndex extends Component
     public function categoryLabel(Post $post): string
     {
         $category = $post->taxonomyItems
-            ->first(fn ($item): bool => (string) data_get($item, 'taxonomy.type') === 'category');
+            ->first(fn ($item): bool => in_array((string) data_get($item, 'taxonomy.type'), ['category', 'post_category'], true));
 
         return data_get($category, 'name') ?: __('Bez kategorije');
     }

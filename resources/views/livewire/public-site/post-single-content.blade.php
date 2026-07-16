@@ -21,11 +21,13 @@
             {{ $backLabel }}
         </a>
 
-        @livewire(\IvanBaric\Blog\Livewire\PublicSite\PostSingleActions::class, [
-            'post' => $post,
-            'section' => $section,
-            'currentUrl' => request()->fullUrl(),
-        ], key('post-single-actions-'.(string) ($post->uuid ?? $post->id)))
+        @if (corexis_actor_id() !== null)
+            @livewire(\IvanBaric\Blog\Livewire\PublicSite\PostSingleActions::class, [
+                'post' => $post,
+                'section' => $section,
+                'currentUrl' => request()->fullUrl(),
+            ], key('post-single-actions-'.(string) ($post->uuid ?? $post->id)))
+        @endif
     </div>
 
     @if ($coverPhoto)

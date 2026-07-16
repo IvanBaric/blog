@@ -24,8 +24,19 @@ final class PostSingleActions extends Component
         'sidebar' => 'Tekst s bočnim podacima',
     ];
 
+    private ?Post $resolvedPost = null;
+
+    private bool $postWasResolved = false;
+
+    private ?Model $resolvedSection = null;
+
+    private bool $sectionWasResolved = false;
+
     #[Locked]
     public string $postUuid = '';
+
+    #[Locked]
+    public ?int $teamId = null;
 
     #[Locked]
     public ?string $sectionUuid = null;
@@ -35,7 +46,12 @@ final class PostSingleActions extends Component
 
     public function mount(Post $post, ?Model $section = null, ?string $currentUrl = null): void
     {
+        $this->resolvedPost = $post->isPublished() ? $post : null;
+        $this->postWasResolved = true;
+        $this->resolvedSection = $section;
+        $this->sectionWasResolved = true;
         $this->postUuid = (string) $post->getAttribute('uuid');
+        $this->teamId = is_numeric($post->getAttribute('team_id')) ? (int) $post->getAttribute('team_id') : null;
         $this->sectionUuid = $section ? (string) $section->getAttribute('uuid') : null;
         $this->currentUrl = $currentUrl ?: url()->current();
     }
@@ -63,6 +79,14 @@ final class PostSingleActions extends Component
 
     public function render(): View
     {
+        if (corexis_actor_id() === null) {
+            return view('blog::livewire.public-site.post-single-actions', [
+                'editUrl' => null,
+                'canCycleSinglePostLayout' => false,
+                'nextSinglePostLayoutLabel' => null,
+            ]);
+        }
+
         $editUrl = $this->editUrl();
         $canCycleSinglePostLayout = $this->canCycleSinglePostLayout();
 
@@ -131,13 +155,20 @@ final class PostSingleActions extends Component
 
     private function post(): ?Post
     {
-        if ($this->postUuid === '') {
+        if ($this->postWasResolved) {
+            return $this->resolvedPost;
+        }
+
+        $this->postWasResolved = true;
+
+        if ($this->postUuid === '' || $this->teamId === null) {
             return null;
         }
 
         $model = BlogModels::post();
 
-        return $model::query()
+        return $this->resolvedPost = $model::query()
+            ->forTenant($this->teamId)
             ->published()
             ->where('uuid', $this->postUuid)
             ->first();
@@ -145,7 +176,13 @@ final class PostSingleActions extends Component
 
     private function section(): ?Model
     {
-        if (! $this->sectionUuid) {
+        if ($this->sectionWasResolved) {
+            return $this->resolvedSection;
+        }
+
+        $this->sectionWasResolved = true;
+
+        if (! $this->sectionUuid || $this->teamId === null) {
             return null;
         }
 
@@ -155,6 +192,9 @@ final class PostSingleActions extends Component
             return null;
         }
 
-        return $sectionModel::query()->where('uuid', $this->sectionUuid)->first();
+        return $this->resolvedSection = $sectionModel::query()
+            ->forTenant($this->teamId)
+            ->where('uuid', $this->sectionUuid)
+            ->first();
     }
 }
