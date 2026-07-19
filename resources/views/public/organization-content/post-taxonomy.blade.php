@@ -1,5 +1,6 @@
 <x-layouts.public
     :title="$taxonomyItem->name"
+    :seo-data="$socialMeta ?? null"
     :organization="$organization"
     :public-pages="$publicPages"
     :template-key="$page ? template_engine()->resolveTemplateKey($page) : null"
@@ -7,7 +8,7 @@
 >
     <main class="bg-white px-6 py-14 dark:bg-zinc-950">
         <div class="mx-auto max-w-6xl">
-            <a href="{{ route(config('blog.public_organization.page_route_name', 'public.organization.page'), ['organizationSlug' => $organization->slug, 'pageSlug' => $page->slug]) }}" class="inline-flex items-center gap-2 text-sm font-semibold text-[color:var(--niva-primary-700)] transition hover:text-[color:var(--niva-primary-800)] dark:text-[color:var(--niva-primary-300)] dark:hover:text-[color:var(--niva-primary-200)]">
+            <a href="{{ app(\IvanBaric\Pages\Support\PublicSiteUrl::class)->page($organization, $page, $publicPages) }}" class="inline-flex items-center gap-2 text-sm font-semibold text-[color:var(--niva-primary-700)] transition hover:text-[color:var(--niva-primary-800)] dark:text-[color:var(--niva-primary-300)] dark:hover:text-[color:var(--niva-primary-200)]">
                 <span aria-hidden="true">&larr;</span>
                 {{ __('Sve objave') }}
             </a>
@@ -27,7 +28,7 @@
                     @php($image = $post->featuredImageUrl('large'))
                     <article class="overflow-hidden rounded-lg bg-zinc-50 shadow-sm shadow-zinc-950/5 transition duration-200 hover:-translate-y-0.5 hover:bg-white hover:shadow-md hover:shadow-zinc-950/10 dark:bg-zinc-900 dark:shadow-black/20 dark:hover:bg-zinc-900/80">
                         @if ($image)
-                            <a href="{{ route(config('blog.public_organization.content_route_name', 'public.organization.content'), ['organizationSlug' => $organization->slug, 'pageSlug' => $page->slug, 'contentSlug' => $post->slug]) }}" class="block cursor-pointer" title="{{ $post->localized('title') }}" aria-label="{{ $post->localized('title') }}">
+                            <a href="{{ app(\IvanBaric\Pages\Support\PublicSiteUrl::class)->content($organization, $page, $post->slug, $publicPages) }}" class="block cursor-pointer" title="{{ $post->localized('title') }}" aria-label="{{ $post->localized('title') }}">
                                 <img src="{{ $image }}" alt="" class="aspect-[4/3] w-full object-cover" loading="lazy" decoding="async">
                             </a>
                         @endif
@@ -36,7 +37,7 @@
                                 <p class="text-xs font-semibold uppercase tracking-wide text-zinc-400 dark:text-zinc-500">{{ $post->published_at->format('d.m.Y.') }}</p>
                             @endif
                             <h2 class="mt-2 text-lg font-semibold tracking-tight text-zinc-950 dark:text-white">
-                                <a href="{{ route(config('blog.public_organization.content_route_name', 'public.organization.content'), ['organizationSlug' => $organization->slug, 'pageSlug' => $page->slug, 'contentSlug' => $post->slug]) }}" class="cursor-pointer transition hover:text-[color:var(--niva-primary-800)] dark:hover:text-[color:var(--niva-primary-200)]">
+                                <a href="{{ app(\IvanBaric\Pages\Support\PublicSiteUrl::class)->content($organization, $page, $post->slug, $publicPages) }}" class="cursor-pointer transition hover:text-[color:var(--niva-primary-800)] dark:hover:text-[color:var(--niva-primary-200)]">
                                     {{ $post->localized('title') }}
                                 </a>
                             </h2>

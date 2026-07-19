@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace IvanBaric\Blog\Livewire\Admin;
 
+use Flux\Flux;
 use Illuminate\Contracts\View\View;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Pagination\Paginator;
+use IvanBaric\Blog\Actions\CreatePostAction;
 use IvanBaric\Blog\Models\Post;
 use IvanBaric\Blog\Support\BlogModels;
 use Livewire\Attributes\Computed;
@@ -24,14 +26,13 @@ final class PostSourceManager extends Component
 
     public string $filter = 'all';
 
+    public string $newPostTitle = '';
+
     #[Locked]
     public string $activeView = 'posts';
 
     #[Locked]
     public ?string $editingPostUuid = null;
-
-    #[Locked]
-    public bool $creatingPost = false;
 
     public function mount(): void
     {
@@ -60,12 +61,69 @@ final class PostSourceManager extends Component
         $this->resetPage();
     }
 
-    public function createPost(): void
+    public function openCreatePost(): void
     {
         corexis_authorize('blog.create', []);
-        $this->editingPostUuid = null;
-        $this->creatingPost = true;
-        unset($this->editingPost);
+        $this->reset('newPostTitle');
+        $this->resetValidation();
+        Flux::modal($this->createPostModalName())->show();
+    }
+
+    public function cancelCreatePost(): void
+    {
+        $this->reset('newPostTitle');
+        $this->resetValidation();
+    }
+
+    public function createPost(CreatePostAction $createPost): void
+    {
+        corexis_authorize('blog.create', []);
+
+        $validated = $this->validate([
+            'newPostTitle' => ['required', 'string', 'max:160'],
+        ], [], [
+            'newPostTitle' => __('naziv objave'),
+        ]);
+
+        $result = $createPost->handle([
+            'title' => [$this->currentLocaleCode() => trim((string) $validated['newPostTitle'])],
+            'content' => null,
+            'context' => config('blog.default_context', 'blog'),
+            'status' => config('blog.default_status', 'draft'),
+            'published_at' => null,
+            'is_featured' => false,
+        ]);
+
+        if (! $result->success) {
+            foreach ($result->errors as $field => $messages) {
+                $this->addError($field === 'title' ? 'newPostTitle' : $field, $messages[0] ?? $result->message);
+            }
+
+            Flux::toast(variant: 'danger', text: $result->message);
+
+            return;
+        }
+
+        if (! $result->data instanceof Post) {
+            Flux::toast(variant: 'danger', text: __('Objava nije mogla biti izrađena.'));
+
+            return;
+        }
+
+        $post = $result->data;
+
+        $this->reset('newPostTitle');
+        $this->editingPostUuid = (string) $post->getAttribute('uuid');
+        unset($this->editingPost, $this->posts, $this->stats);
+
+        Flux::modal($this->createPostModalName())->close();
+        Flux::toast(
+            heading: __('Objava kreirana'),
+            text: __('Nova objava ":title" otvorena je za uređivanje.', ['title' => $post->localized('title')]),
+            variant: 'success',
+        );
+
+        $this->dispatch('pages-public-content-source-updated', source: 'posts');
     }
 
     public function editPost(string $postUuid): void
@@ -74,14 +132,12 @@ final class PostSourceManager extends Component
         corexis_authorize('blog.update', $post);
 
         $this->editingPostUuid = (string) $post->getAttribute('uuid');
-        $this->creatingPost = false;
         unset($this->editingPost);
     }
 
     public function showList(): void
     {
         $this->editingPostUuid = null;
-        $this->creatingPost = false;
         $this->resetPage();
         unset($this->editingPost, $this->posts, $this->stats);
     }
@@ -239,6 +295,11 @@ final class PostSourceManager extends Component
         return view('blog::livewire.admin.post-source-manager');
     }
 
+    public function createPostModalName(): string
+    {
+        return 'source-post-create';
+    }
+
     private function findPost(string $postUuid): Post
     {
         $model = BlogModels::post();
@@ -247,5 +308,10 @@ final class PostSourceManager extends Component
         abort_unless($post instanceof Post, 404);
 
         return $post;
+    }
+
+    private function currentLocaleCode(): string
+    {
+        return corexis_locale_code() ?: config('app.locale', 'en');
     }
 }

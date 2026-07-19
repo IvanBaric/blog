@@ -199,6 +199,13 @@ final class PostForm extends Component
         $this->reset('archivingPostUuid');
         Flux::modal('post-detail-archive-confirm')->close();
         $this->toastFromResult($result);
+
+        if ($this->embedded) {
+            $this->dispatch('blog-source-post-saved');
+
+            return;
+        }
+
         $this->redirectRoute(
             config('blog.routes.admin_name_prefix', 'admin.blog.').'edit',
             ['post' => $post->uuid],
@@ -211,12 +218,16 @@ final class PostForm extends Component
             return;
         }
 
-        $this->persistPost(
+        $saved = $this->persistPost(
             savePostAction: $savePostAction,
             redirectAfterCreate: false,
             successToastMessage: __('Automatsko spremanje podataka'),
             showValidationToast: false,
         );
+
+        if ($saved && $this->embedded) {
+            $this->dispatch('pages-public-content-source-updated', source: 'posts');
+        }
     }
 
     public function isDirty(): bool
@@ -289,6 +300,13 @@ final class PostForm extends Component
         $this->cancelRestore();
         Flux::modal('post-detail-restore-confirm')->close();
         $this->toastFromResult($result);
+
+        if ($this->embedded) {
+            $this->dispatch('blog-source-post-saved');
+
+            return;
+        }
+
         $this->redirectRoute(
             config('blog.routes.admin_name_prefix', 'admin.blog.').'edit',
             ['post' => $uuid],
@@ -351,6 +369,13 @@ final class PostForm extends Component
             text: __('Objava je uspješno uklonjena iz administracije.'),
             variant: 'success',
         );
+        if ($this->embedded) {
+            $this->post = null;
+            $this->dispatch('blog-source-post-saved');
+
+            return;
+        }
+
         $this->skipRender();
         $this->redirectRoute(config('blog.routes.admin_name_prefix', 'admin.blog.').'index', navigate: true);
     }

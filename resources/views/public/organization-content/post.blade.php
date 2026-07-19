@@ -1,13 +1,15 @@
 <x-layouts.public
     :title="$post->localized('title')"
     :seo-model="$post"
+    :seo-data="$socialMeta ?? null"
     :organization="$organization"
     :public-pages="$publicPages"
     :template-key="$page ? template_engine()->resolveTemplateKey($page) : null"
     compact-header
 >
     @php
-        $backUrl = route(config('blog.public_organization.page_route_name', 'public.organization.page'), ['organizationSlug' => $organization->slug, 'pageSlug' => $page->slug]);
+        $pagePath = app(\IvanBaric\Pages\Support\PageHierarchy::class)->slugPath($page, $publicPages);
+        $backUrl = app(\IvanBaric\Pages\Support\PublicSiteUrl::class)->page($organization, $page, $publicPages);
         $backLabel = filled($backLabel ?? null) ? (string) $backLabel : __('Natrag na objave');
         $previousPostLabel = filled($previousPostLabel ?? null) ? (string) $previousPostLabel : __('Prethodna objava');
         $nextPostLabel = filled($nextPostLabel ?? null) ? (string) $nextPostLabel : __('Sljedeća objava');
@@ -32,7 +34,7 @@
             'post' => $post,
             'section' => $singleLayoutSection ?? null,
             'organizationSlug' => (string) $organization->slug,
-            'pageSlug' => (string) $page->slug,
+            'pageSlug' => $pagePath,
             'backUrl' => $backUrl,
             'backLabel' => $backLabel,
             'previousPostLabel' => $previousPostLabel,

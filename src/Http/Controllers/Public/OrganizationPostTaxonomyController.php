@@ -5,18 +5,23 @@ declare(strict_types=1);
 namespace IvanBaric\Blog\Http\Controllers\Public;
 
 use Illuminate\Contracts\View\View;
-use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
+use IvanBaric\Blog\Contracts\PublicTaxonomySeoDataProvider;
 use IvanBaric\Blog\Models\Post;
 use IvanBaric\Blog\Support\BlogConfigResolver;
 use IvanBaric\Blog\Support\BlogModels;
+use IvanBaric\Pages\Models\Page;
+use IvanBaric\Pages\Support\PageHierarchy;
 use IvanBaric\Taxonomy\Support\TaxonomyModels;
 
 final class OrganizationPostTaxonomyController
 {
+    public function __construct(private readonly PageHierarchy $hierarchy) {}
+
     public function __invoke(string $organizationSlug, string $pageSlug, string $taxonomyKind, string $taxonomySlug): View
     {
         abort_unless(in_array($taxonomyKind, ['kategorija', 'oznaka'], true), 404);
@@ -64,14 +69,23 @@ final class OrganizationPostTaxonomyController
             })
             ->ordered()
             ->paginate((int) config('blog.pagination.public', 12));
+        $publicPages = $this->publicPages($organization);
 
-        return view((string) config('blog.public_organization.post_taxonomy_view', 'blog::public.organization-content.post-taxonomy'), [
+        return view($this->publicView(), [
             'organization' => $organization,
             'page' => $page,
-            'publicPages' => $this->publicPages($organization),
+            'publicPages' => $publicPages,
             'taxonomyKind' => $taxonomyKind,
             'taxonomyItem' => $taxonomyItem,
             'posts' => $posts,
+            'socialMeta' => $this->socialMeta(
+                $organization,
+                $page,
+                $publicPages,
+                $taxonomyKind,
+                $taxonomyItem,
+                $posts->total(),
+            ),
         ]);
     }
 
@@ -92,37 +106,38 @@ final class OrganizationPostTaxonomyController
             ->firstOrFail();
     }
 
-    private function page(Model $organization, string $pageSlug): Model
+    private function page(Model $organization, string $pageSlug): Page
     {
         $model = $this->pageModel();
         $teamId = (int) $organization->getAttribute($this->organizationTeamColumn());
-        $normalized = Str::slug($pageSlug);
-        $aliases = (array) config('pages.public_slug_aliases', []);
-        $canonical = (string) ($aliases[$normalized] ?? $normalized);
-        $slugCandidates = array_values(array_unique([$normalized, $canonical]));
+        $normalizedPath = collect(explode('/', trim($pageSlug, '/')))
+            ->map(fn (string $segment): string => Str::slug($segment))
+            ->implode('/');
 
-        return $model::query()
+        $pages = $model::query()
             ->where((string) config('corexis.tenancy.id_column', 'team_id'), $teamId)
             ->published()
-            ->where(function (Builder $query) use ($slugCandidates): void {
-                $query->whereIn('slug', $slugCandidates);
+            ->navigationVisible()
+            ->ordered()
+            ->get();
 
-                if (Schema::hasColumn(BlogConfigResolver::pagesTable(), 'page_key')) {
-                    $query->orWhereIn('page_key', $slugCandidates);
-                }
-            })
-            ->firstOrFail();
+        $page = $pages->first(fn (Page $candidate): bool => $this->hierarchy->slugPath($candidate, $pages) === $normalizedPath);
+
+        return $page ?? abort(404);
     }
 
     /**
      * @param  array<int, string>  $types
      */
-    private function taxonomyItem(int $teamId, array $types, string $taxonomySlug): object
+    private function taxonomyItem(int $teamId, array $types, string $taxonomySlug): \stdClass
     {
         $taxonomyItemModel = TaxonomyModels::taxonomyItem();
         $taxonomyModel = TaxonomyModels::taxonomy();
-        $taxonomyItemsTable = (new $taxonomyItemModel)->getTable();
-        $taxonomiesTable = (new $taxonomyModel)->getTable();
+        $taxonomyItemInstance = new $taxonomyItemModel;
+        $taxonomyInstance = new $taxonomyModel;
+        abort_unless($taxonomyItemInstance instanceof Model && $taxonomyInstance instanceof Model, 500);
+        $taxonomyItemsTable = $taxonomyItemInstance->getTable();
+        $taxonomiesTable = $taxonomyInstance->getTable();
         $tenantColumn = (string) config('corexis.tenancy.id_column', 'team_id');
 
         return DB::table($taxonomyItemsTable)
@@ -140,7 +155,8 @@ final class OrganizationPostTaxonomyController
             ]) ?? abort(404);
     }
 
-    private function publicPages(Model $organization)
+    /** @return Collection<int, Page> */
+    private function publicPages(Model $organization): Collection
     {
         $model = $this->pageModel();
 
@@ -150,14 +166,18 @@ final class OrganizationPostTaxonomyController
                 (int) $organization->getAttribute($this->organizationTeamColumn()),
             )
             ->published()
+            ->navigationVisible()
             ->ordered()
             ->get();
     }
 
+    /** @return class-string<Page> */
     private function pageModel(): string
     {
         $model = BlogConfigResolver::publicOrganizationPageModel();
         abort_unless($model !== null, 404);
+
+        abort_unless(is_a($model, Page::class, true), 500);
 
         return $model;
     }
@@ -175,5 +195,47 @@ final class OrganizationPostTaxonomyController
     private function organizationTeamColumn(): string
     {
         return (string) config('blog.public_organization.organization_team_column', 'team_id');
+    }
+
+    /**
+     * @param  Collection<int, Page>  $publicPages
+     * @return array<string, mixed>|null
+     */
+    private function socialMeta(
+        Model $organization,
+        Page $page,
+        Collection $publicPages,
+        string $kind,
+        \stdClass $taxonomyItem,
+        int $postCount,
+    ): ?array {
+        $provider = config('blog.public_organization.seo_data_provider');
+
+        if (! is_string($provider) || $provider === '') {
+            return null;
+        }
+
+        $resolved = app($provider);
+
+        return $resolved instanceof PublicTaxonomySeoDataProvider
+            ? $resolved->taxonomy(
+                $organization,
+                $page,
+                $publicPages,
+                $kind,
+                (string) data_get($taxonomyItem, 'name'),
+                (string) data_get($taxonomyItem, 'slug'),
+                $postCount,
+            )
+            : null;
+    }
+
+    /** @return view-string */
+    private function publicView(): string
+    {
+        $view = config('blog.public_organization.post_taxonomy_view', 'blog::public.organization-content.post-taxonomy');
+        abort_unless(is_string($view) && view()->exists($view), 500);
+
+        return $view;
     }
 }

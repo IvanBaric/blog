@@ -1,5 +1,5 @@
 <div class="min-w-0">
-    @if ($creatingPost || $this->editingPost)
+    @if ($this->editingPost)
         <div class="mb-4 flex items-center justify-between gap-3">
             <flux:button type="button" wire:click="showList" variant="ghost" size="sm" icon="arrow-left">
                 {{ __('Objave') }}
@@ -9,11 +9,11 @@
         @livewire(
             \IvanBaric\Blog\Livewire\Admin\PostForm::class,
             ['post' => $this->editingPost, 'embedded' => true],
-            key('source-post-form-'.($editingPostUuid ?: 'new'))
+            key('source-post-form-'.$editingPostUuid)
         )
     @else
         <div class="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between" data-blog-source-toolbar>
-            <flux:button type="button" wire:click="createPost" wire:loading.attr="disabled" wire:target="createPost" variant="primary" size="sm" icon="plus" class="w-full justify-center sm:w-auto">
+            <flux:button type="button" wire:click="openCreatePost" wire:loading.attr="disabled" wire:target="openCreatePost" variant="primary" size="sm" icon="plus" class="w-full justify-center sm:w-auto">
                 {{ __('Nova objava') }}
             </flux:button>
 
@@ -160,5 +160,33 @@
                 @endif
             @endif
         </x-admin-ui::panel>
+
+        <flux:modal name="{{ $this->createPostModalName() }}" x-on:close="$wire.cancelCreatePost()" class="max-w-lg">
+            <form wire:submit="createPost" wire:loading.class="admin-panel-content-loading" wire:target="createPost" class="relative space-y-6">
+                <x-admin-ui::loading-overlay target="createPost" :text="__('Spremanje...')" />
+
+                <div>
+                    <flux:heading size="lg">{{ __('Nova objava') }}</flux:heading>
+                    <flux:subheading class="mt-1 text-sm text-zinc-500 dark:text-zinc-400">{{ __('Unesite naziv objave koju želite dodati.') }}</flux:subheading>
+                </div>
+
+                <flux:input
+                    wire:model="newPostTitle"
+                    :label="__('Naziv objave')"
+                    :placeholder="__('Naziv objave')"
+                    autofocus
+                    data-required
+                />
+
+                <div class="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                    <flux:modal.close>
+                        <flux:button type="button" variant="ghost">{{ __('Odustani') }}</flux:button>
+                    </flux:modal.close>
+                    <x-admin-ui::submit-button target="createPost" icon="plus">
+                        {{ __('Dodaj objavu') }}
+                    </x-admin-ui::submit-button>
+                </div>
+            </form>
+        </flux:modal>
     @endif
 </div>
