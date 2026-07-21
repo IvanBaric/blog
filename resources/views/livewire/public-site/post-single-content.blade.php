@@ -27,6 +27,8 @@
                 'section' => $section,
                 'currentUrl' => request()->fullUrl(),
             ], key('post-single-actions-'.(string) ($post->uuid ?? $post->id)))
+
+            @livewire(\IvanBaric\Pages\Livewire\PublicSite\SectionEditorFlyout::class, [], key('post-single-section-editor-'.(string) ($post->uuid ?? $post->id)))
         @endif
     </div>
 

@@ -1,4 +1,4 @@
-<section class="admin-page">
+<section @class(['admin-page' => ! $embedded, 'min-w-0' => $embedded])>
 @if ($post?->status === 'archived')
     <x-admin-ui::editor-header
         :eyebrow="__('Arhivirana objava')"
@@ -180,13 +180,15 @@
         </div>
     </flux:modal>
 @else
-    <form id="post-form" wire:submit="save" wire:poll.180000ms="autoSave" wire:loading.class="admin-panel-content-loading" wire:target="save" class="relative space-y-6">
+    <form id="post-form" wire:submit="save" wire:poll.180000ms="autoSave" wire:loading.class="admin-panel-content-loading" wire:target="save" class="relative space-y-7" data-post-editor-form data-embedded="{{ $embedded ? 'true' : 'false' }}">
         <x-admin-ui::loading-overlay target="save" :text="__('Spremanje...')" />
 
+        @unless ($publicFlyout)
         <x-admin-ui::editor-header
             :eyebrow="$post?->exists ? __('Uredi objavu') : __('Nova objava')"
             icon="newspaper"
             :context-as-title="true"
+            class="{{ $embedded ? 'border-b border-zinc-200 pb-6 dark:border-zinc-800' : '' }}"
         >
             <x-slot:meta>
                 @if ($lastSavedAt)
@@ -232,28 +234,36 @@
                 </x-slot:actions>
             @endunless
         </x-admin-ui::editor-header>
+        @endunless
 
-        <div class="grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1fr)_24rem]">
-            <div class="min-w-0 space-y-6">
-                <section class="admin-panel p-4 sm:p-6">
-                    <div class="space-y-5">
+        <div class="grid min-w-0 gap-7 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-start lg:gap-8">
+            <div class="min-w-0 space-y-7">
+                <section class="admin-panel admin-panel-strong-border" data-post-content-panel>
+                    <div class="admin-panel-header">
+                        <div>
+                            <h2 class="admin-panel-title">{{ __('Sadržaj objave') }}</h2>
+                            <p class="admin-panel-description">{{ __('Uredite naslov i glavni tekst koji će posjetitelji čitati.') }}</p>
+                        </div>
+                    </div>
+                    <div class="space-y-6 p-5 sm:p-6">
                         <flux:input wire:model="form.title.{{ $locale }}" :label="__('Naslov')" type="text" data-required autofocus />
                         <flux:editor wire:model="form.content.{{ $locale }}" :label="__('Sadržaj')" :description="__('Glavni tekst objave.')" class="admin-rich-text-editor-tall" />
                     </div>
                 </section>
 
             <div class="grid min-w-0 grid-cols-1 gap-6" data-post-taxonomy-fields>
-                <section class="admin-panel p-4 sm:p-6">
+                <section class="admin-panel admin-panel-strong-border p-4 sm:p-6">
                     <div class="space-y-5">
-                        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                            <div>
+                        <div class="space-y-3">
+                            <div class="flex items-center justify-between gap-3">
                                 <h2 class="admin-panel-title">{{ __('Kategorije') }}</h2>
-                                <p class="admin-panel-description mt-1">{{ __('Odaberite jednu ili više kategorija ili dodajte novu izravno iz pretrage.') }}</p>
+
+                                <flux:button type="button" wire:click="openTaxonomyManager('category')" wire:loading.attr="disabled" wire:target="openTaxonomyManager" variant="filled" size="sm" icon="folder" class="shrink-0">
+                                    {{ __('Uredi kategorije') }}
+                                </flux:button>
                             </div>
 
-                            <flux:button type="button" wire:click="openTaxonomyManager('category')" wire:loading.attr="disabled" wire:target="openTaxonomyManager" variant="filled" size="sm" icon="folder" class="w-full justify-center sm:w-auto">
-                                {{ __('Uredi kategorije') }}
-                            </flux:button>
+                            <p class="admin-panel-description">{{ __('Odaberite jednu ili više kategorija ili dodajte novu izravno iz pretrage.') }}</p>
                         </div>
 
                         <flux:pillbox wire:model.live="form.categoryUuids" variant="combobox" multiple :placeholder="__('Odaberi kategorije...')">
@@ -272,17 +282,18 @@
                     </div>
                 </section>
 
-                <section class="admin-panel p-4 sm:p-6">
+                <section class="admin-panel admin-panel-strong-border p-4 sm:p-6">
                     <div class="space-y-5">
-                        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                            <div>
+                        <div class="space-y-3">
+                            <div class="flex items-center justify-between gap-3">
                                 <h2 class="admin-panel-title">{{ __('Oznake') }}</h2>
-                                <p class="admin-panel-description mt-1">{{ __('Dodajte jednu ili više oznaka za tematsko povezivanje objava.') }}</p>
+
+                                <flux:button type="button" wire:click="openTaxonomyManager('tags')" wire:loading.attr="disabled" wire:target="openTaxonomyManager" variant="filled" size="sm" icon="tag" class="shrink-0">
+                                    {{ __('Uredi oznake') }}
+                                </flux:button>
                             </div>
 
-                            <flux:button type="button" wire:click="openTaxonomyManager('tags')" wire:loading.attr="disabled" wire:target="openTaxonomyManager" variant="filled" size="sm" icon="tag" class="w-full justify-center sm:w-auto">
-                                {{ __('Uredi oznake') }}
-                            </flux:button>
+                            <p class="admin-panel-description">{{ __('Dodajte jednu ili više oznaka za tematsko povezivanje objava.') }}</p>
                         </div>
 
                         <flux:pillbox wire:model.live="form.tagUuids" variant="combobox" multiple :placeholder="__('Odaberi oznake...')">
@@ -303,7 +314,7 @@
             </div>
         </div>
 
-        <aside class="min-w-0 space-y-6">
+        <aside class="min-w-0 space-y-0 rounded-xl bg-zinc-50/70 ring-1 ring-zinc-200/80 dark:bg-zinc-900/45 dark:ring-zinc-800 lg:sticky lg:top-4 lg:self-start" data-post-settings-column>
             <section class="admin-panel p-4 sm:p-6">
                 <div class="space-y-5">
                     <flux:select wire:model="form.status" variant="listbox" :label="__('Status')">

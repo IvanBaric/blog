@@ -73,14 +73,18 @@ final class PostForm extends Component
     public bool $embedded = false;
 
     #[Locked]
+    public bool $publicFlyout = false;
+
+    #[Locked]
     public ?string $taxonomyManagerType = null;
 
-    public function mount(?Post $post = null, bool $embedded = false): void
+    public function mount(?Post $post = null, bool $embedded = false, bool $publicFlyout = false): void
     {
         corexis_authorize($post?->exists ? 'blog.update' : 'blog.create', $post?->exists ? $post : []);
 
         $this->locale = $this->currentLocaleCode();
         $this->embedded = $embedded;
+        $this->publicFlyout = $publicFlyout;
         $this->form->initialize($this->locale);
 
         if ($post?->exists) {

@@ -4,13 +4,14 @@ declare(strict_types=1);
 
 namespace IvanBaric\Blog\Livewire\PublicSite;
 
+use Flux\Flux;
 use Illuminate\Contracts\View\View;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Facades\Route;
 use IvanBaric\Blog\Models\Post;
 use IvanBaric\Blog\Support\BlogConfigResolver;
 use IvanBaric\Blog\Support\BlogModels;
 use Livewire\Attributes\Locked;
+use Livewire\Attributes\On;
 use Livewire\Component;
 
 final class PostSingleActions extends Component
@@ -43,6 +44,9 @@ final class PostSingleActions extends Component
 
     #[Locked]
     public string $currentUrl = '';
+
+    #[Locked]
+    public ?string $editingPostUuid = null;
 
     public function mount(Post $post, ?Model $section = null, ?string $currentUrl = null): void
     {
@@ -77,37 +81,63 @@ final class PostSingleActions extends Component
         $this->dispatch('single-post-layout-cycled', sectionUuid: (string) $section->getAttribute('uuid'));
     }
 
+    public function openPostEditor(): void
+    {
+        $post = $this->post();
+
+        abort_unless($post && $this->canManagePost($post), 403);
+
+        $this->editingPostUuid = (string) $post->getAttribute('uuid');
+        Flux::modal($this->editorModalName())->show();
+    }
+
+    public function cancelPostEditor(): void
+    {
+        $this->editingPostUuid = null;
+    }
+
+    #[On('blog-source-post-saved')]
+    public function postSaved(): void
+    {
+        if ($this->editingPostUuid === null) {
+            return;
+        }
+
+        Flux::modal($this->editorModalName())->close();
+        $this->editingPostUuid = null;
+        $this->resolvedPost = null;
+        $this->postWasResolved = false;
+        $this->dispatch('pages-public-content-source-updated', source: 'posts');
+    }
+
+    public function editorModalName(): string
+    {
+        return 'public-post-editor-'.$this->postUuid;
+    }
+
     public function render(): View
     {
         if (corexis_actor_id() === null) {
             return view('blog::livewire.public-site.post-single-actions', [
-                'editUrl' => null,
+                'post' => null,
+                'section' => null,
+                'canEditPost' => false,
                 'canCycleSinglePostLayout' => false,
                 'nextSinglePostLayoutLabel' => null,
             ]);
         }
 
-        $editUrl = $this->editUrl();
+        $post = $this->post();
+        $canEditPost = $post !== null && $this->canManagePost($post);
         $canCycleSinglePostLayout = $this->canCycleSinglePostLayout();
 
         return view('blog::livewire.public-site.post-single-actions', [
-            'editUrl' => $editUrl,
+            'post' => $post,
+            'section' => $this->section(),
+            'canEditPost' => $canEditPost,
             'canCycleSinglePostLayout' => $canCycleSinglePostLayout,
             'nextSinglePostLayoutLabel' => $canCycleSinglePostLayout ? $this->nextSinglePostLayoutLabel() : null,
         ]);
-    }
-
-    private function editUrl(): ?string
-    {
-        $post = $this->post();
-
-        $routeName = config('blog.routes.admin_name_prefix', 'admin.blog.').'edit';
-
-        if (! $post || ! $this->canManagePost($post) || ! Route::has($routeName)) {
-            return null;
-        }
-
-        return route($routeName, ['post' => $post->getAttribute('uuid')]);
     }
 
     private function canCycleSinglePostLayout(): bool
